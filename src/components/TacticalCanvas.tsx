@@ -303,11 +303,12 @@ export default function TacticalCanvas() {
   const [selectedShapeId, setSelectedShapeId] = useState<string | null>(null);
   const [isShapeMenuOpen, setIsShapeMenuOpen] = useState<boolean>(false);
 
-  // État du mode dessin à la main
+  // État du mode dessin & réglages du trait
   const [isDrawMode, setIsDrawMode] = useState<boolean>(false);
   const [penType, setPenType] = useState<'pen' | 'highlighter' | 'dashed'>('pen');
   const [drawColor, setDrawColor] = useState<string>('#f59e0b');
   const [drawWidth, setDrawWidth] = useState<number>(4);
+  const [drawOpacity, setDrawOpacity] = useState<number>(1);
   const isDrawingRef = useRef<boolean>(false);
 
   // Joueurs
@@ -362,7 +363,7 @@ export default function TacticalCanvas() {
     }
   }, [history, historyIndex]);
 
-  // --- MENU CONTEXTUEL (CLIC DROIT / MAINTIEN MOBILE) ---
+  // --- MENU CONTEXTUEL ---
   const [contextMenu, setContextMenu] = useState<ContextMenuState>({
     visible: false,
     x: 0,
@@ -371,16 +372,52 @@ export default function TacticalCanvas() {
     targetType: null,
   });
 
-  const longPressTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
-
-  // Fermeture du menu contextuel au clic extérieur
   useEffect(() => {
     const handleGlobalClick = () => setContextMenu((prev) => ({ ...prev, visible: false }));
     window.addEventListener('click', handleGlobalClick);
     return () => window.removeEventListener('click', handleGlobalClick);
   }, []);
 
-  // --- SUPPRESSION & MODIFICATION ---
+  // --- MODIFICATION D'UNE FORME SELECTIONNEE EN DIRECT ---
+  const selectedShape = shapes.find((s) => s.id === selectedShapeId);
+
+  const updateSelectedShape = useCallback((fields: Partial<CustomShape>) => {
+    if (!selectedShapeId) return;
+    const updatedShapes = shapes.map((s) => (s.id === selectedShapeId ? { ...s, ...fields } : s));
+    setShapes(updatedShapes);
+    saveToHistory(players, updatedShapes);
+  }, [selectedShapeId, shapes, players, saveToHistory]);
+
+  const handleColorChange = (color: string) => {
+    setDrawColor(color);
+    if (selectedShapeId) updateSelectedShape({ color });
+  };
+
+  const handleWidthChange = (width: number) => {
+    setDrawWidth(width);
+    if (selectedShapeId) updateSelectedShape({ strokeWidth: width });
+  };
+
+  const handleOpacityChange = (opacity: number) => {
+    setDrawOpacity(opacity);
+    if (selectedShapeId) updateSelectedShape({ opacity });
+  };
+
+  const handlePenTypeChange = (type: 'pen' | 'highlighter' | 'dashed') => {
+    setPenType(type);
+    const newOpacity = type === 'highlighter' ? 0.35 : 1;
+    setDrawOpacity(newOpacity);
+
+    if (selectedShapeId) {
+      updateSelectedShape({
+        penType: type,
+        opacity: newOpacity,
+        type: type === 'dashed' ? 'dashed-arrow' : selectedShape?.type,
+      });
+    }
+  };
+
+  // --- SUPPRESSION ET MODIFICATION ---
   const deleteTarget = useCallback((id: string, type: 'shape' | 'player') => {
     if (type === 'shape') {
       const newShapes = shapes.filter((s) => s.id !== id);
@@ -429,7 +466,7 @@ export default function TacticalCanvas() {
     setContextMenu((prev) => ({ ...prev, visible: false }));
   };
 
-  // --- RACCOURCIS CLAVIER GLOBAL (Ctrl+Z, Cmd+Z, Suppr, Backspace) ---
+  // --- RACCOURCIS CLAVIER ---
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
       const target = e.target as HTMLElement;
@@ -476,7 +513,7 @@ export default function TacticalCanvas() {
     }
   }, []);
 
-  // Export d'image (terrain + formes + joueurs uniquement)
+  // Export d'image
   const handleExportImage = () => {
     if (!stageRef.current) return;
     setSelectedShapeId(null);
@@ -502,9 +539,9 @@ export default function TacticalCanvas() {
       type,
       x: 360,
       y: 220,
-      color: '#f59e0b',
-      strokeWidth: 3,
-      opacity: type === 'rect' || type === 'circle' ? 0.4 : 1,
+      color: drawColor,
+      strokeWidth: drawWidth,
+      opacity: type === 'rect' || type === 'circle' ? 0.4 : drawOpacity,
       text: type === 'text' ? 'Annotation' : undefined,
       points: type.includes('arrow') ? [0, 0, 100, 0] : undefined,
       width: type === 'rect' ? 120 : undefined,
@@ -521,7 +558,7 @@ export default function TacticalCanvas() {
     saveToHistory(players, updatedShapes);
   };
 
-  // Événements de dessin libre à la souris
+  // Dessin libre au pointeur
   const handleStageMouseDown = (e: any) => {
     if (!isDrawMode) {
       if (e.target === e.target.getStage()) {
@@ -547,7 +584,7 @@ export default function TacticalCanvas() {
       points: [pointX, pointY],
       color: drawColor,
       strokeWidth: penType === 'highlighter' ? Math.max(drawWidth, 14) : drawWidth,
-      opacity: penType === 'highlighter' ? 0.35 : 1,
+      opacity: penType === 'highlighter' ? 0.35 : drawOpacity,
       penType: penType,
     };
 
@@ -582,6 +619,42 @@ export default function TacticalCanvas() {
       isDrawingRef.current = false;
       saveToHistory(players, shapes);
     }
+  };
+
+  // Application des tactiques prédéfinies ou personnalisées
+  const applyFormation = (team: 'blue' | 'red', formationKey: string) => {
+    const isBlue = team === 'blue';
+    let layout = customFormations[formationKey];
+
+    if (!layout) {
+      layout = isBlue ? FORMATIONS_BLUE[formationKey] : FORMATIONS_RED[formationKey];
+    }
+
+    if (!layout) return;
+
+    if (isBlue) {
+      setSelectedBlueFormation(formationKey);
+    } else {
+      setSelectedRedFormation(formationKey);
+    }
+
+    const prefix = isBlue ? 'b-' : 'r-';
+    const color = isBlue ? '#3b82f6' : '#ef4444';
+
+    const remainingPlayers = players.filter((p) => !p.id.startsWith(prefix));
+
+    const newTeamPlayers: Player[] = layout.map((p, idx) => ({
+      id: `${prefix}${idx + 1}`,
+      x: isBlue ? p.x : (customFormations[formationKey] ? 800 - p.x : p.x),
+      y: p.y,
+      number: p.number,
+      color: color,
+      name: p.name,
+    }));
+
+    const finalPlayers = resolveCollisions([...remainingPlayers, ...newTeamPlayers]);
+    setPlayers(finalPlayers);
+    saveToHistory(finalPlayers, shapes);
   };
 
   const handleSelectAction = (team: 'blue' | 'red', value: string) => {
@@ -647,7 +720,7 @@ export default function TacticalCanvas() {
     setIsCreating(false);
   };
 
-  const handleConfirmDelete = () => {
+  const confirmDeleteTactique = () => {
     if (!tactiqueToDelete) return;
 
     const updatedCustoms = { ...customFormations };
@@ -656,627 +729,619 @@ export default function TacticalCanvas() {
     setCustomFormations(updatedCustoms);
     localStorage.setItem('custom_tactical_formations', JSON.stringify(updatedCustoms));
 
-    if (selectedBlueFormation === tactiqueToDelete) applyFormation('blue', '4-3-3');
-    if (selectedRedFormation === tactiqueToDelete) applyFormation('red', '4-3-3');
+    if (selectedBlueFormation === tactiqueToDelete) {
+      setSelectedBlueFormation('4-3-3');
+      applyFormation('blue', '4-3-3');
+    }
+    if (selectedRedFormation === tactiqueToDelete) {
+      setSelectedRedFormation('4-3-3');
+      applyFormation('red', '4-3-3');
+    }
 
+    setToastMessage(`Tactique "${tactiqueToDelete}" supprimée.`);
+    setTimeout(() => setToastMessage(null), 3000);
     setTactiqueToDelete(null);
   };
 
-  const handleDragStart = (e: any, id: string) => {
-    if (isDrawMode) return;
-    setSelectedPlayerId(id);
-    setSelectedShapeId(null);
-    e.target.moveToTop();
+  // Drag End d'un joueur
+  const handlePlayerDragEnd = (id: string, e: any) => {
+    const newX = Math.max(30, Math.min(770, e.target.x()));
+    const newY = Math.max(30, Math.min(470, e.target.y()));
+
+    const updatedPlayers = players.map((p) => (p.id === id ? { ...p, x: newX, y: newY } : p));
+    const resolved = resolveCollisions(updatedPlayers);
+    setPlayers(resolved);
+    saveToHistory(resolved, shapes);
   };
 
-  const handleDragEnd = (e: any, id: string) => {
-    if (isDrawMode) return;
-    let targetX = e.target.x();
-    let targetY = e.target.y();
-
-    targetX = Math.max(30, Math.min(770, targetX));
-    targetY = Math.max(30, Math.min(470, targetY));
-
-    const updatedPlayers = resolveCollisions(
-      players.map((p) => (p.id === id ? { ...p, x: targetX, y: targetY } : p))
-    );
-    setPlayers(updatedPlayers);
-    saveToHistory(updatedPlayers, shapes);
-  };
-
-  // HANDLERS TACTILE ET CLIC DROIT POUR PITCH ITEMS
-  const handleItemContextMenu = (e: any, id: string, type: 'shape' | 'player') => {
-    e.evt.preventDefault();
-    e.evt.stopPropagation();
-    const evt = e.evt;
-
-    if (type === 'shape') {
-      setSelectedShapeId(id);
-      setSelectedPlayerId(null);
-    } else {
-      setSelectedPlayerId(id);
-      setSelectedShapeId(null);
-    }
-
-    setContextMenu({
-      visible: true,
-      x: evt.clientX,
-      y: evt.clientY,
-      targetId: id,
-      targetType: type,
-    });
-  };
-
-  const handleItemTouchStart = (e: any, id: string, type: 'shape' | 'player') => {
-    const evt = e.evt;
-    if (!evt.touches || evt.touches.length !== 1) return;
-    const touch = evt.touches[0];
-
-    longPressTimerRef.current = setTimeout(() => {
-      if (type === 'shape') {
-        setSelectedShapeId(id);
-        setSelectedPlayerId(null);
-      } else {
-        setSelectedPlayerId(id);
-        setSelectedShapeId(null);
-      }
-
-      setContextMenu({
-        visible: true,
-        x: touch.clientX,
-        y: touch.clientY,
-        targetId: id,
-        targetType: type,
-      });
-    }, 500);
-  };
-
-  const clearLongPress = () => {
-    if (longPressTimerRef.current) {
-      clearTimeout(longPressTimerRef.current);
-      longPressTimerRef.current = null;
-    }
-  };
-
-  const applyFormation = (team: 'blue' | 'red', formationKey: string) => {
-    const isBlue = team === 'blue';
-    const prefix = isBlue ? 'b-' : 'r-';
-
-    if (isBlue) setSelectedBlueFormation(formationKey);
-    else setSelectedRedFormation(formationKey);
-
-    let formation: { x: number; y: number; number: string; name: string }[] | undefined;
-
-    if (customFormations[formationKey]) {
-      const base = customFormations[formationKey];
-      formation = isBlue ? base : base.map((p) => ({ ...p, x: 800 - p.x }));
-    } else {
-      formation = isBlue ? FORMATIONS_BLUE[formationKey] : FORMATIONS_RED[formationKey];
-    }
-
-    if (!formation) return;
-
-    const updatedPlayers = resolveCollisions(
-      players.map((player) => {
-        if (player.id.startsWith(prefix)) {
-          const index = parseInt(player.id.replace(prefix, '')) - 1;
-          if (formation[index]) {
-            return {
-              ...player,
-              x: formation[index].x,
-              y: formation[index].y,
-              number: formation[index].number,
-              name: formation[index].name,
-            };
-          }
-        }
-        return player;
-      })
-    );
-    setPlayers(updatedPlayers);
-    saveToHistory(updatedPlayers, shapes);
+  // Drag End d'une forme
+  const handleShapeDragEnd = (id: string, e: any) => {
+    const updatedShapes = shapes.map((s) => (s.id === id ? { ...s, x: e.target.x(), y: e.target.y() } : s));
+    setShapes(updatedShapes);
+    saveToHistory(players, updatedShapes);
   };
 
   return (
-    <div className="fixed inset-0 flex flex-col overflow-hidden bg-neutral-950 select-none">
+    <div className="flex flex-col h-screen bg-slate-900 text-slate-100 select-none overflow-hidden font-sans">
+      {/* Barre supérieure : Choix des tactiques & Actions */}
+      <header className="flex flex-wrap items-center justify-between gap-3 p-3 bg-slate-800 border-b border-slate-700 shadow-md">
+        <div className="flex items-center gap-4">
+          <h1 className="text-lg font-bold text-amber-400 flex items-center gap-2">
+            ⚽ Tableau Tactique
+          </h1>
 
-      {toastMessage && (
-        <div className="fixed top-6 left-1/2 -translate-x-1/2 bg-emerald-600 text-white px-5 py-2.5 rounded-full shadow-lg z-50 text-sm font-semibold animate-bounce">
-          {toastMessage}
+          {/* Équipe Bleue */}
+          <div className="flex items-center gap-2 bg-blue-950/60 p-1.5 rounded-lg border border-blue-700/50">
+            <span className="w-3 h-3 rounded-full bg-blue-500"></span>
+            <select
+              value={selectedBlueFormation}
+              onChange={(e) => handleSelectAction('blue', e.target.value)}
+              className="bg-slate-900 text-slate-200 text-sm px-2 py-1 rounded border border-slate-700 focus:outline-none"
+            >
+              <optgroup label="Dispositifs Standard">
+                {DEFAULT_FORMATIONS.map((f) => (
+                  <option key={`blue-${f.key}`} value={f.key}>
+                    {f.key} ({f.team})
+                  </option>
+                ))}
+              </optgroup>
+              {Object.keys(customFormations).length > 0 && (
+                <optgroup label="Dispositifs Personnalisés">
+                  {Object.keys(customFormations).map((name) => (
+                    <option key={`blue-custom-${name}`} value={name}>
+                      {name}
+                    </option>
+                  ))}
+                </optgroup>
+              )}
+              {customFormations[selectedBlueFormation] && (
+                <optgroup label="Actions">
+                  <option value="action:update">💾 Mettre à jour la tactique</option>
+                  <option value="action:delete">🗑️ Supprimer la tactique</option>
+                </optgroup>
+              )}
+            </select>
+          </div>
+
+          {/* Équipe Rouge */}
+          <div className="flex items-center gap-2 bg-red-950/60 p-1.5 rounded-lg border border-red-700/50">
+            <span className="w-3 h-3 rounded-full bg-red-500"></span>
+            <select
+              value={selectedRedFormation}
+              onChange={(e) => handleSelectAction('red', e.target.value)}
+              className="bg-slate-900 text-slate-200 text-sm px-2 py-1 rounded border border-slate-700 focus:outline-none"
+            >
+              <optgroup label="Dispositifs Standard">
+                {DEFAULT_FORMATIONS.map((f) => (
+                  <option key={`red-${f.key}`} value={f.key}>
+                    {f.key} ({f.team})
+                  </option>
+                ))}
+              </optgroup>
+              {Object.keys(customFormations).length > 0 && (
+                <optgroup label="Dispositifs Personnalisés">
+                  {Object.keys(customFormations).map((name) => (
+                    <option key={`red-custom-${name}`} value={name}>
+                      {name}
+                    </option>
+                  ))}
+                </optgroup>
+              )}
+            </select>
+          </div>
+        </div>
+
+        {/* Boutons d'action généraux */}
+        <div className="flex items-center gap-2">
+          <button
+            onClick={() => setIsCreating(true)}
+            className="px-3 py-1.5 bg-emerald-600 hover:bg-emerald-500 text-white rounded text-sm font-medium transition"
+          >
+            + Sauvegarder Tactique
+          </button>
+          <button
+            onClick={undo}
+            disabled={historyIndex === 0}
+            className={`px-3 py-1.5 rounded text-sm font-medium transition ${
+              historyIndex === 0
+                ? 'bg-slate-700 text-slate-500 cursor-not-allowed'
+                : 'bg-slate-700 hover:bg-slate-600 text-slate-200'
+            }`}
+          >
+            ↩ Annuler (Ctrl+Z)
+          </button>
+          <button
+            onClick={handleExportImage}
+            className="px-3 py-1.5 bg-amber-600 hover:bg-amber-500 text-white rounded text-sm font-medium transition"
+          >
+            📷 Exporter PNG
+          </button>
+        </div>
+      </header>
+
+      {/* Barre d'outils de Dessin */}
+      <div className="flex flex-wrap items-center justify-between gap-3 px-4 py-2 bg-slate-800/80 border-b border-slate-700 text-sm">
+        <div className="flex items-center gap-3">
+          <span className="font-semibold text-slate-400">Mode :</span>
+          <button
+            onClick={() => setIsDrawMode(!isDrawMode)}
+            className={`px-3 py-1 rounded font-medium transition ${
+              isDrawMode ? 'bg-amber-500 text-slate-900' : 'bg-slate-700 hover:bg-slate-600 text-slate-200'
+            }`}
+          >
+            {isDrawMode ? '✏️️ Dessin Actif' : '👆 Sélection / Déplacement'}
+          </button>
+
+          {/* Type de crayon */}
+          <div className="flex items-center bg-slate-900 rounded p-0.5 border border-slate-700">
+            <button
+              onClick={() => handlePenTypeChange('pen')}
+              className={`px-2 py-1 rounded text-xs ${penType === 'pen' ? 'bg-amber-500 text-slate-900 font-bold' : 'text-slate-300'}`}
+            >
+              Stylo
+            </button>
+            <button
+              onClick={() => handlePenTypeChange('highlighter')}
+              className={`px-2 py-1 rounded text-xs ${penType === 'highlighter' ? 'bg-amber-500 text-slate-900 font-bold' : 'text-slate-300'}`}
+            >
+              Surligneur
+            </button>
+            <button
+              onClick={() => handlePenTypeChange('dashed')}
+              className={`px-2 py-1 rounded text-xs ${penType === 'dashed' ? 'bg-amber-500 text-slate-900 font-bold' : 'text-slate-300'}`}
+            >
+              Pointillé
+            </button>
+          </div>
+
+          {/* Formes préféfinies */}
+          <div className="relative">
+            <button
+              onClick={() => setIsShapeMenuOpen(!isShapeMenuOpen)}
+              className="px-3 py-1 bg-slate-700 hover:bg-slate-600 rounded text-slate-200 font-medium"
+            >
+              + Formes 📐
+            </button>
+            {isShapeMenuOpen && (
+              <div className="absolute top-full left-0 mt-1 bg-slate-800 border border-slate-700 rounded shadow-xl z-20 flex flex-col py-1 min-w-[140px]">
+                <button onClick={() => addShape('arrow')} className="px-3 py-1.5 hover:bg-slate-700 text-left">➡️ Flèche</button>
+                <button onClick={() => addShape('dashed-arrow')} className="px-3 py-1.5 hover:bg-slate-700 text-left">↪️ Flèche Pointillée</button>
+                <button onClick={() => addShape('rect')} className="px-3 py-1.5 hover:bg-slate-700 text-left">🔲 Rectangle</button>
+                <button onClick={() => addShape('circle')} className="px-3 py-1.5 hover:bg-slate-700 text-left">⚪ Cercle</button>
+                <button onClick={() => addShape('text')} className="px-3 py-1.5 hover:bg-slate-700 text-left">🔤 Texte</button>
+              </div>
+            )}
+          </div>
+        </div>
+
+        {/* Style du trait */}
+        <div className="flex items-center gap-4">
+          <div className="flex items-center gap-2">
+            <span>Couleur :</span>
+            <input
+              type="color"
+              value={drawColor}
+              onChange={(e) => handleColorChange(e.target.value)}
+              className="w-7 h-7 rounded border border-slate-600 cursor-pointer bg-transparent"
+            />
+          </div>
+
+          <div className="flex items-center gap-2">
+            <span>Épaisseur :</span>
+            <input
+              type="range"
+              min="1"
+              max="20"
+              value={drawWidth}
+              onChange={(e) => handleWidthChange(Number(e.target.value))}
+              className="w-20 accent-amber-500"
+            />
+          </div>
+
+          <div className="flex items-center gap-2">
+            <span>Opacité :</span>
+            <input
+              type="range"
+              min="0.1"
+              max="1"
+              step="0.05"
+              value={drawOpacity}
+              onChange={(e) => handleOpacityChange(Number(e.target.value))}
+              className="w-20 accent-amber-500"
+            />
+          </div>
+        </div>
+      </div>
+
+      {/* Zone du Terrain de Football */}
+      <div ref={fieldAreaRef} className="flex-1 flex items-center justify-center p-2 relative bg-slate-950 overflow-hidden">
+        <Stage
+          ref={stageRef}
+          width={DESIGN_WIDTH * scale}
+          height={DESIGN_HEIGHT * scale}
+          scaleX={scale}
+          scaleY={scale}
+          onMouseDown={handleStageMouseDown}
+          onMouseMove={handleStageMouseMove}
+          onMouseUp={handleStageMouseUp}
+          onTouchStart={handleStageMouseDown}
+          onTouchMove={handleStageMouseMove}
+          onTouchEnd={handleStageMouseUp}
+          className="shadow-2xl rounded-lg overflow-hidden border-2 border-slate-700"
+        >
+          {/* Layer Terrain */}
+          <Layer>
+            {/* Pelouse de football */}
+            <Rect x={0} y={0} width={800} height={500} fill="#15803d" />
+            {/* Bandes de pelouse alternées */}
+            {[0, 100, 200, 300, 400, 500, 600, 700].map((xPos, idx) => (
+              <Rect
+                key={`stripe-${xPos}`}
+                x={xPos}
+                y={0}
+                width={100}
+                height={500}
+                fill={idx % 2 === 0 ? '#16a34a' : '#15803d'}
+              />
+            ))}
+
+            {/* Lignes du terrain */}
+            <Rect x={20} y={20} width={760} height={460} stroke="white" strokeWidth={2.5} />
+            <Line points={[400, 20, 400, 480]} stroke="white" strokeWidth={2.5} />
+            <Circle x={400} y={250} radius={65} stroke="white" strokeWidth={2.5} />
+            <Circle x={400} y={250} radius={4} fill="white" />
+
+            {/* Surface de réparation Gauche */}
+            <Rect x={20} y={115} width={130} height={270} stroke="white" strokeWidth={2.5} />
+            <Rect x={20} y={185} width={45} height={130} stroke="white" strokeWidth={2.5} />
+            <Circle x={110} y={250} radius={3.5} fill="white" />
+
+            {/* Surface de réparation Droite */}
+            <Rect x={650} y={115} width={130} height={270} stroke="white" strokeWidth={2.5} />
+            <Rect x={735} y={185} width={45} height={130} stroke="white" strokeWidth={2.5} />
+            <Circle x={690} y={250} radius={3.5} fill="white" />
+
+            {/* Cages de but */}
+            <Rect x={8} y={210} width={12} height={80} stroke="white" fill="#ffffff33" strokeWidth={2} />
+            <Rect x={780} y={210} width={12} height={80} stroke="white" fill="#ffffff33" strokeWidth={2} />
+          </Layer>
+
+          {/* Layer Formes & Dessins */}
+          <Layer>
+            {shapes.map((s) => {
+              const isSelected = s.id === selectedShapeId;
+
+              if (s.type === 'freehand') {
+                return (
+                  <Line
+                    key={s.id}
+                    points={s.points}
+                    stroke={s.color}
+                    strokeWidth={s.strokeWidth}
+                    opacity={s.opacity}
+                    dash={s.penType === 'dashed' ? [10, 5] : undefined}
+                    lineCap="round"
+                    lineJoin="round"
+                    tension={0.5}
+                    draggable={!isDrawMode}
+                    onClick={() => {
+                      if (!isDrawMode) setSelectedShapeId(s.id);
+                    }}
+                    onTap={() => {
+                      if (!isDrawMode) setSelectedShapeId(s.id);
+                    }}
+                    onContextMenu={(e) => {
+                      e.evt.preventDefault();
+                      setContextMenu({
+                        visible: true,
+                        x: e.evt.clientX,
+                        y: e.evt.clientY,
+                        targetId: s.id,
+                        targetType: 'shape',
+                      });
+                    }}
+                  />
+                );
+              }
+
+              if (s.type === 'arrow' || s.type === 'dashed-arrow') {
+                return (
+                  <Arrow
+                    key={s.id}
+                    ref={isSelected ? shapeRef : null}
+                    x={s.x}
+                    y={s.y}
+                    points={s.points || [0, 0, 100, 0]}
+                    stroke={s.color}
+                    fill={s.color}
+                    strokeWidth={s.strokeWidth}
+                    opacity={s.opacity}
+                    dash={s.type === 'dashed-arrow' ? [10, 5] : undefined}
+                    draggable={!isDrawMode}
+                    onDragEnd={(e) => handleShapeDragEnd(s.id, e)}
+                    onClick={() => {
+                      if (!isDrawMode) setSelectedShapeId(s.id);
+                    }}
+                    onTap={() => {
+                      if (!isDrawMode) setSelectedShapeId(s.id);
+                    }}
+                    onContextMenu={(e) => {
+                      e.evt.preventDefault();
+                      setContextMenu({
+                        visible: true,
+                        x: e.evt.clientX,
+                        y: e.evt.clientY,
+                        targetId: s.id,
+                        targetType: 'shape',
+                      });
+                    }}
+                  />
+                );
+              }
+
+              if (s.type === 'rect') {
+                return (
+                  <Rect
+                    key={s.id}
+                    ref={isSelected ? shapeRef : null}
+                    x={s.x}
+                    y={s.y}
+                    width={s.width}
+                    height={s.height}
+                    stroke={s.color}
+                    fill={`${s.color}33`}
+                    strokeWidth={s.strokeWidth}
+                    opacity={s.opacity}
+                    draggable={!isDrawMode}
+                    onDragEnd={(e) => handleShapeDragEnd(s.id, e)}
+                    onClick={() => {
+                      if (!isDrawMode) setSelectedShapeId(s.id);
+                    }}
+                    onTap={() => {
+                      if (!isDrawMode) setSelectedShapeId(s.id);
+                    }}
+                    onContextMenu={(e) => {
+                      e.evt.preventDefault();
+                      setContextMenu({
+                        visible: true,
+                        x: e.evt.clientX,
+                        y: e.evt.clientY,
+                        targetId: s.id,
+                        targetType: 'shape',
+                      });
+                    }}
+                  />
+                );
+              }
+
+              if (s.type === 'circle') {
+                return (
+                  <Circle
+                    key={s.id}
+                    ref={isSelected ? shapeRef : null}
+                    x={s.x}
+                    y={s.y}
+                    radius={s.radius}
+                    stroke={s.color}
+                    fill={`${s.color}33`}
+                    strokeWidth={s.strokeWidth}
+                    opacity={s.opacity}
+                    draggable={!isDrawMode}
+                    onDragEnd={(e) => handleShapeDragEnd(s.id, e)}
+                    onClick={() => {
+                      if (!isDrawMode) setSelectedShapeId(s.id);
+                    }}
+                    onTap={() => {
+                      if (!isDrawMode) setSelectedShapeId(s.id);
+                    }}
+                    onContextMenu={(e) => {
+                      e.evt.preventDefault();
+                      setContextMenu({
+                        visible: true,
+                        x: e.evt.clientX,
+                        y: e.evt.clientY,
+                        targetId: s.id,
+                        targetType: 'shape',
+                      });
+                    }}
+                  />
+                );
+              }
+
+              if (s.type === 'text') {
+                return (
+                  <Text
+                    key={s.id}
+                    ref={isSelected ? shapeRef : null}
+                    x={s.x}
+                    y={s.y}
+                    text={s.text || 'Annotation'}
+                    fontSize={20}
+                    fontStyle="bold"
+                    fill={s.color}
+                    opacity={s.opacity}
+                    draggable={!isDrawMode}
+                    onDragEnd={(e) => handleShapeDragEnd(s.id, e)}
+                    onClick={() => {
+                      if (!isDrawMode) setSelectedShapeId(s.id);
+                    }}
+                    onTap={() => {
+                      if (!isDrawMode) setSelectedShapeId(s.id);
+                    }}
+                    onContextMenu={(e) => {
+                      e.evt.preventDefault();
+                      setContextMenu({
+                        visible: true,
+                        x: e.evt.clientX,
+                        y: e.evt.clientY,
+                        targetId: s.id,
+                        targetType: 'shape',
+                      });
+                    }}
+                  />
+                );
+              }
+
+              return null;
+            })}
+
+            {/* Outil d'ajustement/redimensionnement Konva */}
+            {selectedShapeId && <Transformer ref={trRef} rotateEnabled={true} />}
+          </Layer>
+
+          {/* Layer Joueurs */}
+          <Layer>
+            {players.map((p) => {
+              const isSelected = p.id === selectedPlayerId;
+              return (
+                <Group
+                  key={p.id}
+                  x={p.x}
+                  y={p.y}
+                  draggable={!isDrawMode}
+                  onDragEnd={(e) => handlePlayerDragEnd(p.id, e)}
+                  onClick={() => {
+                    if (!isDrawMode) {
+                      setSelectedPlayerId(p.id);
+                      setSelectedShapeId(null);
+                    }
+                  }}
+                  onTap={() => {
+                    if (!isDrawMode) {
+                      setSelectedPlayerId(p.id);
+                      setSelectedShapeId(null);
+                    }
+                  }}
+                  onContextMenu={(e) => {
+                    e.evt.preventDefault();
+                    setContextMenu({
+                      visible: true,
+                      x: e.evt.clientX,
+                      y: e.evt.clientY,
+                      targetId: p.id,
+                      targetType: 'player',
+                    });
+                  }}
+                >
+                  <Circle
+                    radius={16}
+                    fill={p.color}
+                    stroke={isSelected ? '#f59e0b' : '#ffffff'}
+                    strokeWidth={isSelected ? 3 : 2}
+                    shadowColor="black"
+                    shadowBlur={5}
+                    shadowOpacity={0.4}
+                  />
+                  <Text
+                    text={p.number}
+                    fontSize={13}
+                    fontStyle="bold"
+                    fill="#ffffff"
+                    align="center"
+                    verticalAlign="middle"
+                    offsetX={6}
+                    offsetY={6}
+                  />
+                  <Text
+                    text={p.name}
+                    fontSize={11}
+                    fill="#ffffff"
+                    align="center"
+                    offsetY={-20}
+                    offsetX={p.name.length * 3}
+                    shadowColor="black"
+                    shadowBlur={3}
+                  />
+                </Group>
+              );
+            })}
+          </Layer>
+        </Stage>
+      </div>
+
+      {/* Menu Contextuel */}
+      {contextMenu.visible && (
+        <div
+          className="fixed bg-slate-800 text-slate-100 border border-slate-700 rounded shadow-2xl z-50 py-1 min-w-[130px]"
+          style={{ top: contextMenu.y, left: contextMenu.x }}
+        >
+          <button
+            onClick={() => contextMenu.targetId && modifyTarget(contextMenu.targetId, contextMenu.targetType!)}
+            className="w-full text-left px-4 py-2 hover:bg-slate-700 text-sm flex items-center gap-2"
+          >
+            ✏️ Modifier
+          </button>
+          <button
+            onClick={() => contextMenu.targetId && deleteTarget(contextMenu.targetId, contextMenu.targetType!)}
+            className="w-full text-left px-4 py-2 hover:bg-red-600/30 text-red-400 text-sm flex items-center gap-2"
+          >
+            🗑️ Supprimer
+          </button>
         </div>
       )}
 
-      {tactiqueToDelete && (
-        <div className="fixed inset-0 bg-black/70 flex items-center justify-center z-50 p-4">
-          <div className="bg-neutral-900 border border-neutral-700 p-5 rounded-lg shadow-xl max-w-sm w-full text-center flex flex-col gap-4">
-            <h3 className="text-base font-bold text-white">Supprimer ce dispositif ?</h3>
-            <p className="text-xs text-neutral-300">
-              Es-tu sûr de vouloir supprimer la tactique <span className="font-semibold text-amber-400">« {tactiqueToDelete} »</span> ? Cette action est irréversible.
-            </p>
-            <div className="flex justify-center gap-3 mt-2">
+      {/* Modale Sauvegarder Tactique */}
+      {isCreating && (
+        <div className="fixed inset-0 bg-black/60 backdrop-blur-sm flex items-center justify-center z-50 p-4">
+          <form onSubmit={handleSaveCustomTactique} className="bg-slate-800 p-6 rounded-xl border border-slate-700 shadow-2xl max-w-md w-full">
+            <h3 className="text-lg font-bold text-slate-100 mb-4">Nouvelle Tactique Personnalisée</h3>
+            <input
+              type="text"
+              placeholder="Nom de la tactique (ex: 4-3-3 Pressing)"
+              value={newTactiqueName}
+              onChange={(e) => setNewTactiqueName(e.target.value)}
+              className="w-full bg-slate-900 border border-slate-700 rounded px-3 py-2 text-slate-100 mb-4 focus:outline-none focus:border-amber-500"
+              autoFocus
+            />
+            <div className="flex justify-end gap-3">
               <button
-                onClick={() => setTactiqueToDelete(null)}
-                className="bg-neutral-800 hover:bg-neutral-700 text-neutral-300 text-xs px-4 py-2 rounded transition font-medium border border-neutral-700"
+                type="button"
+                onClick={() => setIsCreating(false)}
+                className="px-4 py-2 bg-slate-700 hover:bg-slate-600 rounded text-slate-300 font-medium text-sm"
               >
                 Annuler
               </button>
               <button
-                onClick={handleConfirmDelete}
-                className="bg-red-600 hover:bg-red-500 text-white text-xs px-4 py-2 rounded transition font-medium shadow"
+                type="submit"
+                className="px-4 py-2 bg-emerald-600 hover:bg-emerald-500 text-white rounded font-medium text-sm"
               >
-                Confirmer la suppression
+                Enregistrer
+              </button>
+            </div>
+          </form>
+        </div>
+      )}
+
+      {/* Modale Confirmation Suppression */}
+      {tactiqueToDelete && (
+        <div className="fixed inset-0 bg-black/60 backdrop-blur-sm flex items-center justify-center z-50 p-4">
+          <div className="bg-slate-800 p-6 rounded-xl border border-slate-700 shadow-2xl max-w-sm w-full">
+            <h3 className="text-lg font-bold text-slate-100 mb-2">Supprimer la tactique ?</h3>
+            <p className="text-slate-400 text-sm mb-6">
+              Êtes-vous sûr de vouloir supprimer le dispositif &quot;{tactiqueToDelete}&quot; ?
+            </p>
+            <div className="flex justify-end gap-3">
+              <button
+                onClick={() => setTactiqueToDelete(null)}
+                className="px-4 py-2 bg-slate-700 hover:bg-slate-600 rounded text-slate-300 font-medium text-sm"
+              >
+                Annuler
+              </button>
+              <button
+                onClick={confirmDeleteTactique}
+                className="px-4 py-2 bg-red-600 hover:bg-red-500 text-white rounded font-medium text-sm"
+              >
+                Supprimer
               </button>
             </div>
           </div>
         </div>
       )}
 
-      {/* Barre de contrôles supérieure */}
-      <div className="shrink-0 flex justify-center px-2 pt-2 pb-1 z-50">
-        <div className="flex flex-wrap items-center justify-center gap-3 bg-neutral-900/90 backdrop-blur-md px-4 py-1.5 rounded-full border border-neutral-800 shadow-lg relative">
-
-          {/* Bouton Annuler (Ctrl+Z) */}
-          <button
-            onClick={undo}
-            disabled={historyIndex <= 0}
-            className={`px-3 py-1 rounded-full text-xs font-semibold border transition ${
-              historyIndex > 0
-                ? 'bg-neutral-800 hover:bg-neutral-700 text-white border-neutral-700 active:scale-95'
-                : 'bg-neutral-900 text-neutral-600 border-neutral-800 cursor-not-allowed'
-            }`}
-          >
-            ↶ Annuler (Ctrl+Z)
-          </button>
-
-          <div className="h-4 w-px bg-neutral-800 my-auto" />
-
-          {/* Menu Formes & Dessin */}
-          <div className="relative">
-            <button
-              onClick={() => setIsShapeMenuOpen(!isShapeMenuOpen)}
-              className={`border px-2.5 py-1 rounded-full text-xs font-semibold flex items-center gap-1.5 transition active:scale-95 ${
-                isDrawMode
-                  ? 'bg-amber-500 text-neutral-950 border-amber-400 shadow-md shadow-amber-500/20'
-                  : 'bg-neutral-800 hover:bg-neutral-700 text-amber-400 border-neutral-700'
-              }`}
-            >
-              <span>{isDrawMode ? '✍️ Dessin en cours' : '🔷 Formes & Dessin'}</span>
-              <span className="text-[10px] text-neutral-400">▼</span>
-            </button>
-
-            {isShapeMenuOpen && (
-              <div className="absolute left-0 top-full mt-2 w-52 bg-neutral-900 border border-neutral-700 rounded-lg shadow-2xl overflow-hidden text-xs py-1 z-50">
-                <div className="px-3 py-1 text-[10px] font-bold text-amber-400 uppercase tracking-wider">
-                  ✏️ Dessin à la main
-                </div>
-                <button
-                  onClick={() => {
-                    setIsDrawMode(true);
-                    setSelectedShapeId(null);
-                    setSelectedPlayerId(null);
-                    setIsShapeMenuOpen(false);
-                  }}
-                  className={`w-full text-left px-3 py-1.5 flex items-center gap-2 transition ${
-                    isDrawMode ? 'bg-amber-500/20 text-amber-300 font-semibold' : 'hover:bg-neutral-800 text-neutral-200'
-                  }`}
-                >
-                  <span>✏️</span> Activer le dessin libre
-                </button>
-
-                <div className="border-t border-neutral-800 my-1" />
-
-                <div className="px-3 py-1 text-[10px] font-bold text-neutral-400 uppercase tracking-wider">
-                  Lignes & Flèches
-                </div>
-                <button
-                  onClick={() => addShape('arrow')}
-                  className="w-full text-left px-3 py-1.5 hover:bg-neutral-800 text-neutral-200 flex items-center gap-2 transition"
-                >
-                  <span className="text-amber-400">➔</span> Flèche continue
-                </button>
-                <button
-                  onClick={() => addShape('dashed-arrow')}
-                  className="w-full text-left px-3 py-1.5 hover:bg-neutral-800 text-neutral-200 flex items-center gap-2 transition"
-                >
-                  <span className="text-amber-400">⇢</span> Flèche pointillée
-                </button>
-
-                <div className="border-t border-neutral-800 my-1" />
-                <div className="px-3 py-1 text-[10px] font-bold text-neutral-400 uppercase tracking-wider">
-                  Zones & Formes
-                </div>
-                <button
-                  onClick={() => addShape('rect')}
-                  className="w-full text-left px-3 py-1.5 hover:bg-neutral-800 text-neutral-200 flex items-center gap-2 transition"
-                >
-                  <span className="text-amber-400">▭</span> Zone Rectangulaire
-                </button>
-                <button
-                  onClick={() => addShape('circle')}
-                  className="w-full text-left px-3 py-1.5 hover:bg-neutral-800 text-neutral-200 flex items-center gap-2 transition"
-                >
-                  <span className="text-amber-400">◯</span> Zone Circulaire
-                </button>
-
-                <div className="border-t border-neutral-800 my-1" />
-                <div className="px-3 py-1 text-[10px] font-bold text-neutral-400 uppercase tracking-wider">
-                  Texte
-                </div>
-                <button
-                  onClick={() => addShape('text')}
-                  className="w-full text-left px-3 py-1.5 hover:bg-neutral-800 text-neutral-200 flex items-center gap-2 transition"
-                >
-                  <span className="text-amber-400">✎</span> Annotation / Texte
-                </button>
-              </div>
-            )}
-          </div>
-
-          <div className="h-4 w-px bg-neutral-800 my-auto" />
-
-          {/* Choix des Bleus */}
-          <div className="flex items-center gap-2">
-            <label htmlFor="blue-formation-select" className="text-xs font-semibold text-blue-400">
-              Bleus :
-            </label>
-            <select
-              id="blue-formation-select"
-              value={selectedBlueFormation}
-              onChange={(e) => handleSelectAction('blue', e.target.value)}
-              className="bg-neutral-800 text-white text-xs px-2.5 py-1 rounded border border-neutral-700 outline-none focus:border-blue-500 cursor-pointer font-medium"
-            >
-              <optgroup label="Formations prédéfinies">
-                {DEFAULT_FORMATIONS.map((f) => (
-                  <option key={`blue-def-${f.key}`} value={f.key}>{f.key} — {f.team}</option>
-                ))}
-              </optgroup>
-              {Object.keys(customFormations).length > 0 && (
-                <optgroup label="Formations personnalisées ⭐">
-                  {Object.keys(customFormations).map((name) => (
-                    <option key={`blue-custom-${name}`} value={name}>⭐ {name}</option>
-                  ))}
-                </optgroup>
-              )}
-              {customFormations[selectedBlueFormation] && (
-                <optgroup label="⚙️ Gérer cette tactique">
-                  <option value="action:update">💾 Enregistrer les modifications</option>
-                  <option value="action:delete">❌ Supprimer la tactique</option>
-                </optgroup>
-              )}
-            </select>
-          </div>
-
-          {/* Bouton Créer */}
-          <div className="flex items-center justify-center">
-            {!isCreating ? (
-              <button
-                onClick={() => setIsCreating(true)}
-                className="bg-emerald-600 hover:bg-emerald-500 text-white text-xs px-2.5 py-1 rounded font-medium transition flex items-center gap-1 shadow"
-              >
-                <span className="text-sm font-bold">+</span> Créer
-              </button>
-            ) : (
-              <form onSubmit={handleSaveCustomTactique} className="flex items-center gap-1 bg-neutral-800 p-1 rounded border border-neutral-700">
-                <input
-                  type="text"
-                  placeholder="Nom"
-                  value={newTactiqueName}
-                  onChange={(e) => setNewTactiqueName(e.target.value)}
-                  className="bg-neutral-900 text-white text-xs px-2 py-0.5 rounded border border-neutral-600 outline-none focus:border-emerald-500 w-28"
-                  autoFocus
-                />
-                <button type="submit" className="bg-emerald-600 text-white text-xs px-2 py-0.5 rounded font-medium">OK</button>
-                <button type="button" onClick={() => setIsCreating(false)} className="text-neutral-400 hover:text-white text-xs px-1">✕</button>
-              </form>
-            )}
-          </div>
-
-          {/* Choix des Rouges */}
-          <div className="flex items-center gap-2">
-            <label htmlFor="red-formation-select" className="text-xs font-semibold text-red-400">
-              Rouges :
-            </label>
-            <select
-              id="red-formation-select"
-              value={selectedRedFormation}
-              onChange={(e) => handleSelectAction('red', e.target.value)}
-              className="bg-neutral-800 text-white text-xs px-2.5 py-1 rounded border border-neutral-700 outline-none focus:border-red-500 cursor-pointer font-medium"
-            >
-              <optgroup label="Formations prédéfinies">
-                {DEFAULT_FORMATIONS.map((f) => (
-                  <option key={`red-def-${f.key}`} value={f.key}>{f.key} — {f.team}</option>
-                ))}
-              </optgroup>
-              {Object.keys(customFormations).length > 0 && (
-                <optgroup label="Formations personnalisées ⭐">
-                  {Object.keys(customFormations).map((name) => (
-                    <option key={`red-custom-${name}`} value={name}>⭐ {name}</option>
-                  ))}
-                </optgroup>
-              )}
-              {customFormations[selectedRedFormation] && (
-                <optgroup label="⚙️ Gérer cette tactique">
-                  <option value="action:update">💾 Enregistrer les modifications</option>
-                  <option value="action:delete">❌ Supprimer la tactique</option>
-                </optgroup>
-              )}
-            </select>
-          </div>
-
-          <div className="h-4 w-px bg-neutral-800 my-auto" />
-
-          {/* Bouton d'Exportation d'Image */}
-          <button
-            onClick={handleExportImage}
-            className="bg-sky-600 hover:bg-sky-500 text-white px-3 py-1 rounded-full text-xs font-semibold flex items-center gap-1.5 transition shadow"
-          >
-            📸 Exporter PNG
-          </button>
-        </div>
-      </div>
-
-      {/* Zone du terrain Canvas */}
-      <div ref={fieldAreaRef} className="flex-1 flex items-center justify-center relative p-2 overflow-hidden">
-        <div
-          style={{
-            width: DESIGN_WIDTH * scale,
-            height: DESIGN_HEIGHT * scale,
-          }}
-          className="relative shadow-2xl rounded-lg overflow-hidden border-2 border-neutral-800"
-        >
-          <Stage
-            ref={stageRef}
-            width={DESIGN_WIDTH * scale}
-            height={DESIGN_HEIGHT * scale}
-            scaleX={scale}
-            scaleY={scale}
-            onMouseDown={handleStageMouseDown}
-            onMouseMove={handleStageMouseMove}
-            onMouseUp={handleStageMouseUp}
-            onTouchStart={handleStageMouseDown}
-            onTouchMove={handleStageMouseMove}
-            onTouchEnd={handleStageMouseUp}
-          >
-            {/* Calque terrain de football */}
-            <Layer>
-              {/* Fond pelouse */}
-              <Rect x={0} y={0} width={DESIGN_WIDTH} height={DESIGN_HEIGHT} fill="#15803d" />
-
-              {/* Ligne extérieure */}
-              <Rect
-                x={20}
-                y={20}
-                width={760}
-                height={460}
-                stroke="#ffffff"
-                strokeWidth={3}
-                opacity={0.85}
-              />
-
-              {/* Ligne médiane */}
-              <Line points={[400, 20, 400, 480]} stroke="#ffffff" strokeWidth={3} opacity={0.85} />
-
-              {/* Cercle central */}
-              <Circle x={400} y={250} radius={65} stroke="#ffffff" strokeWidth={3} opacity={0.85} />
-              <Circle x={400} y={250} radius={4} fill="#ffffff" opacity={0.85} />
-
-              {/* Surface gauche */}
-              <Rect x={20} y={130} width={120} height={240} stroke="#ffffff" strokeWidth={3} opacity={0.85} />
-              <Rect x={20} y={190} width={45} height={120} stroke="#ffffff" strokeWidth={3} opacity={0.85} />
-
-              {/* Surface droite */}
-              <Rect x={660} y={130} width={120} height={240} stroke="#ffffff" strokeWidth={3} opacity={0.85} />
-              <Rect x={735} y={190} width={45} height={120} stroke="#ffffff" strokeWidth={3} opacity={0.85} />
-            </Layer>
-
-            {/* Calque des formes & dessins */}
-            <Layer>
-              {shapes.map((s) => {
-                const isSelected = s.id === selectedShapeId;
-
-                if (s.type === 'arrow' || s.type === 'dashed-arrow') {
-                  return (
-                    <Arrow
-                      key={s.id}
-                      ref={isSelected ? shapeRef : null}
-                      x={s.x}
-                      y={s.y}
-                      points={s.points || [0, 0, 100, 0]}
-                      stroke={s.color}
-                      fill={s.color}
-                      strokeWidth={s.strokeWidth || 3}
-                      dash={s.type === 'dashed-arrow' ? [8, 8] : undefined}
-                      draggable={!isDrawMode}
-                      onClick={() => { setSelectedShapeId(s.id); setSelectedPlayerId(null); }}
-                      onTap={() => { setSelectedShapeId(s.id); setSelectedPlayerId(null); }}
-                      onContextMenu={(e) => handleItemContextMenu(e, s.id, 'shape')}
-                      onTouchStart={(e) => handleItemTouchStart(e, s.id, 'shape')}
-                      onTouchMove={clearLongPress}
-                      onTouchEnd={clearLongPress}
-                    />
-                  );
-                }
-
-                if (s.type === 'rect') {
-                  return (
-                    <Rect
-                      key={s.id}
-                      ref={isSelected ? shapeRef : null}
-                      x={s.x}
-                      y={s.y}
-                      width={s.width || 120}
-                      height={s.height || 70}
-                      fill={s.color}
-                      opacity={s.opacity || 0.4}
-                      stroke={s.color}
-                      strokeWidth={2}
-                      draggable={!isDrawMode}
-                      onClick={() => { setSelectedShapeId(s.id); setSelectedPlayerId(null); }}
-                      onTap={() => { setSelectedShapeId(s.id); setSelectedPlayerId(null); }}
-                      onContextMenu={(e) => handleItemContextMenu(e, s.id, 'shape')}
-                      onTouchStart={(e) => handleItemTouchStart(e, s.id, 'shape')}
-                      onTouchMove={clearLongPress}
-                      onTouchEnd={clearLongPress}
-                    />
-                  );
-                }
-
-                if (s.type === 'circle') {
-                  return (
-                    <Circle
-                      key={s.id}
-                      ref={isSelected ? shapeRef : null}
-                      x={s.x}
-                      y={s.y}
-                      radius={s.radius || 40}
-                      fill={s.color}
-                      opacity={s.opacity || 0.4}
-                      stroke={s.color}
-                      strokeWidth={2}
-                      draggable={!isDrawMode}
-                      onClick={() => { setSelectedShapeId(s.id); setSelectedPlayerId(null); }}
-                      onTap={() => { setSelectedShapeId(s.id); setSelectedPlayerId(null); }}
-                      onContextMenu={(e) => handleItemContextMenu(e, s.id, 'shape')}
-                      onTouchStart={(e) => handleItemTouchStart(e, s.id, 'shape')}
-                      onTouchMove={clearLongPress}
-                      onTouchEnd={clearLongPress}
-                    />
-                  );
-                }
-
-                if (s.type === 'text') {
-                  return (
-                    <Text
-                      key={s.id}
-                      ref={isSelected ? shapeRef : null}
-                      x={s.x}
-                      y={s.y}
-                      text={s.text || 'Texte'}
-                      fontSize={16}
-                      fontStyle="bold"
-                      fill={s.color || '#f59e0b'}
-                      draggable={!isDrawMode}
-                      onClick={() => { setSelectedShapeId(s.id); setSelectedPlayerId(null); }}
-                      onTap={() => { setSelectedShapeId(s.id); setSelectedPlayerId(null); }}
-                      onContextMenu={(e) => handleItemContextMenu(e, s.id, 'shape')}
-                      onTouchStart={(e) => handleItemTouchStart(e, s.id, 'shape')}
-                      onTouchMove={clearLongPress}
-                      onTouchEnd={clearLongPress}
-                    />
-                  );
-                }
-
-                if (s.type === 'freehand') {
-                  return (
-                    <Line
-                      key={s.id}
-                      points={s.points || []}
-                      stroke={s.color}
-                      strokeWidth={s.strokeWidth || 4}
-                      opacity={s.opacity || 1}
-                      dash={s.penType === 'dashed' ? [10, 10] : undefined}
-                      lineCap="round"
-                      lineJoin="round"
-                    />
-                  );
-                }
-
-                return null;
-              })}
-
-              {/* Transformateur de redimensionnement de forme */}
-              {selectedShapeId && <Transformer ref={trRef} rotateEnabled={true} />}
-            </Layer>
-
-            {/* Calque des Joueurs */}
-            <Layer>
-              {players.map((p) => {
-                const isSelected = p.id === selectedPlayerId;
-
-                return (
-                  <Group
-                    key={p.id}
-                    x={p.x}
-                    y={p.y}
-                    draggable={!isDrawMode}
-                    onDragStart={(e) => handleDragStart(e, p.id)}
-                    onDragEnd={(e) => handleDragEnd(e, p.id)}
-                    onClick={() => { setSelectedPlayerId(p.id); setSelectedShapeId(null); }}
-                    onTap={() => { setSelectedPlayerId(p.id); setSelectedShapeId(null); }}
-                    onContextMenu={(e) => handleItemContextMenu(e, p.id, 'player')}
-                    onTouchStart={(e) => handleItemTouchStart(e, p.id, 'player')}
-                    onTouchMove={clearLongPress}
-                    onTouchEnd={clearLongPress}
-                  >
-                    {/* Cercle du joueur */}
-                    <Circle
-                      radius={18}
-                      fill={p.color}
-                      stroke={isSelected ? '#ffffff' : '#000000'}
-                      strokeWidth={isSelected ? 3 : 1}
-                      shadowBlur={isSelected ? 10 : 2}
-                      shadowColor="#000000"
-                    />
-
-                    {/* Numéro */}
-                    <Text
-                      text={p.number}
-                      fontSize={13}
-                      fontStyle="bold"
-                      fill="#ffffff"
-                      align="center"
-                      verticalAlign="middle"
-                      offsetX={6}
-                      offsetY={6}
-                    />
-
-                    {/* Nom du joueur */}
-                    {p.name && (
-                      <Text
-                        text={p.name}
-                        fontSize={11}
-                        fill="#ffffff"
-                        align="center"
-                        y={22}
-                        offsetX={30}
-                        width={60}
-                      />
-                    )}
-                  </Group>
-                );
-              })}
-            </Layer>
-          </Stage>
-        </div>
-      </div>
-
-      {/* Menu Contextuel Pop-up (Clic droit / Maintien Mobile) */}
-      {contextMenu.visible && contextMenu.targetId && (
-        <div
-          style={{
-            position: 'fixed',
-            top: contextMenu.y,
-            left: contextMenu.x,
-            backgroundColor: '#171717',
-            border: '1px solid #404040',
-            boxShadow: '0px 10px 25px rgba(0,0,0,0.5)',
-            borderRadius: '8px',
-            zIndex: 100,
-            overflow: 'hidden',
-          }}
-        >
-          <button
-            onClick={() => modifyTarget(contextMenu.targetId!, contextMenu.targetType!)}
-            className="w-full text-left px-4 py-2 text-xs font-semibold text-neutral-200 hover:bg-neutral-800 transition flex items-center gap-2"
-          >
-            ✏️ Modifier
-          </button>
-          <button
-            onClick={() => deleteTarget(contextMenu.targetId!, contextMenu.targetType!)}
-            className="w-full text-left px-4 py-2 text-xs font-semibold text-red-400 hover:bg-neutral-800 transition flex items-center gap-2 border-t border-neutral-800"
-          >
-            🗑 Supprimer (Suppr)
-          </button>
+      {/* Toast Notification */}
+      {toastMessage && (
+        <div className="fixed bottom-5 right-5 bg-emerald-600 text-white px-4 py-2 rounded-lg shadow-xl z-50 text-sm font-medium animate-bounce">
+          {toastMessage}
         </div>
       )}
     </div>
