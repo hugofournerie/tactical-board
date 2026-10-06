@@ -22,6 +22,7 @@ interface CustomShape {
   radius?: number;
   points?: number[];
   color: string;
+  strokeWidth?: number;
   opacity?: number;
   text?: string;
   scaleX?: number;
@@ -339,6 +340,7 @@ export default function TacticalCanvas() {
       x: 360,
       y: 220,
       color: '#f59e0b',
+      strokeWidth: 3,
       opacity: type === 'rect' || type === 'circle' ? 0.4 : 1,
       text: type === 'text' ? 'Annotation' : undefined,
       points: type.includes('arrow') ? [0, 0, 100, 0] : undefined,
@@ -710,6 +712,25 @@ export default function TacticalCanvas() {
               />
             </div>
 
+            {/* Épaisseur du trait pour les flèches */}
+            {(selectedShape.type === 'arrow' || selectedShape.type === 'dashed-arrow') && (
+              <div className="flex items-center gap-1.5 border-l border-neutral-800 pl-3">
+                <span className="text-neutral-400">Épaisseur :</span>
+                <input
+                  type="range"
+                  min="1"
+                  max="15"
+                  step="1"
+                  value={selectedShape.strokeWidth ?? 3}
+                  onChange={(e) => updateSelectedShape({ strokeWidth: parseInt(e.target.value, 10) })}
+                  className="w-20 accent-amber-500 cursor-pointer"
+                />
+                <span className="text-[10px] text-neutral-400 w-7 text-right">
+                  {(selectedShape.strokeWidth ?? 3)}px
+                </span>
+              </div>
+            )}
+
             {/* Transparence pour les zones (Rect/Circle) */}
             {(selectedShape.type === 'rect' || selectedShape.type === 'circle') && (
               <div className="flex items-center gap-1.5 border-l border-neutral-800 pl-3">
@@ -782,6 +803,9 @@ export default function TacticalCanvas() {
                   const isSelected = shape.id === selectedShapeId;
 
                   if (shape.type === 'arrow' || shape.type === 'dashed-arrow') {
+                    const strokeW = shape.strokeWidth || 3;
+                    const pointerSize = Math.max(8, strokeW * 2.5);
+
                     return (
                       <Arrow
                         key={shape.id}
@@ -789,11 +813,11 @@ export default function TacticalCanvas() {
                         x={shape.x}
                         y={shape.y}
                         points={shape.points || [0, 0, 100, 0]}
-                        pointerLength={10}
-                        pointerWidth={10}
+                        pointerLength={pointerSize}
+                        pointerWidth={pointerSize}
                         fill={shape.color}
                         stroke={shape.color}
-                        strokeWidth={3}
+                        strokeWidth={strokeW}
                         dash={shape.type === 'dashed-arrow' ? [6, 6] : undefined}
                         scaleX={shape.scaleX || 1}
                         scaleY={shape.scaleY || 1}
