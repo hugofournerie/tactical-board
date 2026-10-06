@@ -15,6 +15,7 @@ interface Player {
 const MIN_DISTANCE = 44;
 const DESIGN_WIDTH = 800;
 const DESIGN_HEIGHT = 500;
+const FIELD_MARGIN = 12; // marge de sécurité autour du terrain (bordure incluse)
 
 const DEFAULT_FORMATIONS = [
   { key: '4-3-3', team: 'PSG' },
@@ -233,24 +234,27 @@ const FORMATIONS_RED: Record<string, { x: number; y: number; number: string; nam
 );
 
 export default function TacticalCanvas() {
-  const containerRef = useRef<HTMLDivElement>(null);
-  const [containerWidth, setContainerWidth] = useState<number>(DESIGN_WIDTH);
+  const [scale, setScale] = useState<number>(0);
+  const fieldAreaRef = useRef<HTMLDivElement>(null);
 
+  // Mesure la zone réellement disponible pour le terrain (sous la barre du haut)
+  // et adapte l'échelle pour que le terrain entier, coins compris, soit visible.
   useEffect(() => {
-    const updateWidth = () => {
-      if (containerRef.current) {
-        setContainerWidth(containerRef.current.offsetWidth);
-      }
-    };
-    updateWidth();
-    window.addEventListener('resize', updateWidth);
-    return () => window.removeEventListener('resize', updateWidth);
-  }, []);
+    const el = fieldAreaRef.current;
+    if (!el) return;
 
-  // Facteur de réduction appliqué uniquement sur les petits écrans (< 768px)
-  const isMobile = containerWidth < 768;
-  const mobileScaleFactor = isMobile ? 0.82 : 1;
-  const scale = (containerWidth / DESIGN_WIDTH) * mobileScaleFactor;
+    const updateScale = () => {
+      const availableWidth = el.clientWidth - FIELD_MARGIN;
+      const availableHeight = el.clientHeight - FIELD_MARGIN;
+      if (availableWidth <= 0 || availableHeight <= 0) return;
+      setScale(Math.min(availableWidth / DESIGN_WIDTH, availableHeight / DESIGN_HEIGHT));
+    };
+
+    updateScale();
+    const observer = new ResizeObserver(updateScale);
+    observer.observe(el);
+    return () => observer.disconnect();
+  }, []);
 
   const [selectedBlueFormation, setSelectedBlueFormation] = useState<string>('4-3-3');
   const [selectedRedFormation, setSelectedRedFormation] = useState<string>('4-3-3');
@@ -258,7 +262,7 @@ export default function TacticalCanvas() {
   const [customFormations, setCustomFormations] = useState<Record<string, { x: number; y: number; number: string; name: string }[]>>({});
   const [isCreating, setIsCreating] = useState<boolean>(false);
   const [newTactiqueName, setNewTactiqueName] = useState<string>('');
-  
+
   const [tactiqueToDelete, setTactiqueToDelete] = useState<string | null>(null);
   const [toastMessage, setToastMessage] = useState<string | null>(null);
 
@@ -304,7 +308,7 @@ export default function TacticalCanvas() {
 
     if (value === 'action:delete') {
       setTactiqueToDelete(currentTacticName);
-      return; 
+      return;
     }
 
     if (value === 'action:update') {
@@ -325,7 +329,7 @@ export default function TacticalCanvas() {
 
       setCustomFormations(updatedCustoms);
       localStorage.setItem('custom_tactical_formations', JSON.stringify(updatedCustoms));
-      
+
       setToastMessage(`Dispositif "${currentTacticName}" mis à jour avec succès !`);
       setTimeout(() => setToastMessage(null), 3000);
       return;
@@ -440,8 +444,8 @@ export default function TacticalCanvas() {
   };
 
   return (
-    <div className="flex flex-col items-center gap-4 w-full max-w-4xl relative">
-      
+    <div className="fixed inset-0 flex flex-col overflow-hidden bg-neutral-950 select-none">
+
       {toastMessage && (
         <div className="fixed top-6 left-1/2 -translate-x-1/2 bg-emerald-600 text-white px-5 py-2.5 rounded-full shadow-lg z-50 text-sm font-semibold animate-bounce">
           {toastMessage}
@@ -473,165 +477,160 @@ export default function TacticalCanvas() {
         </div>
       )}
 
-      <div className="flex flex-wrap items-center justify-between gap-4 w-full bg-neutral-900 p-3 rounded-lg border border-neutral-800">
-        
-        <div className="flex items-center gap-2">
-          <label htmlFor="blue-formation-select" className="text-xs font-semibold text-blue-400">
-            Bleus :
-          </label>
-          <select
-            id="blue-formation-select"
-            value={selectedBlueFormation}
-            onChange={(e) => handleSelectAction('blue', e.target.value)}
-            className="bg-neutral-800 text-white text-xs px-3 py-1.5 rounded border border-neutral-700 outline-none focus:border-blue-500 cursor-pointer font-medium"
-          >
-            <optgroup label="Formations prédéfinies">
-              {DEFAULT_FORMATIONS.map((f) => (
-                <option key={`blue-def-${f.key}`} value={f.key}>{f.key} — {f.team}</option>
-              ))}
-            </optgroup>
-            {Object.keys(customFormations).length > 0 && (
-              <optgroup label="Formations personnalisées ⭐">
-                {Object.keys(customFormations).map((name) => (
-                  <option key={`blue-custom-${name}`} value={name}>⭐ {name}</option>
-                ))}
-              </optgroup>
-            )}
-            {customFormations[selectedBlueFormation] && (
-              <optgroup label="⚙️ Gérer cette tactique">
-                <option value="action:update">💾 Enregistrer les modifications</option>
-                <option value="action:delete">❌ Supprimer la tactique</option>
-              </optgroup>
-            )}
-          </select>
-        </div>
+      {/* Barre de contrôles du haut (dans le flux, ne recouvre plus le terrain) */}
+      <div className="shrink-0 flex justify-center px-2 pt-1.5 pb-1 z-30">
+        <div className="flex flex-wrap items-center justify-center gap-3 bg-neutral-900/90 backdrop-blur-md px-4 py-1.5 rounded-full border border-neutral-800 shadow-lg">
 
-        <div className="flex items-center justify-center">
-          {!isCreating ? (
-            <button
-              onClick={() => setIsCreating(true)}
-              className="bg-emerald-600 hover:bg-emerald-500 text-white text-xs px-3 py-1.5 rounded font-medium transition flex items-center gap-1 shadow"
+          <div className="flex items-center gap-2">
+            <label htmlFor="blue-formation-select" className="text-xs font-semibold text-blue-400">
+              Bleus :
+            </label>
+            <select
+              id="blue-formation-select"
+              value={selectedBlueFormation}
+              onChange={(e) => handleSelectAction('blue', e.target.value)}
+              className="bg-neutral-800 text-white text-xs px-2.5 py-1 rounded border border-neutral-700 outline-none focus:border-blue-500 cursor-pointer font-medium"
             >
-              <span className="text-sm font-bold">+</span> Créer une tactique
-            </button>
-          ) : (
-            <form onSubmit={handleSaveCustomTactique} className="flex items-center gap-2 bg-neutral-800 p-1 rounded border border-neutral-700">
-              <input
-                type="text"
-                placeholder="Nom de la tactique"
-                value={newTactiqueName}
-                onChange={(e) => setNewTactiqueName(e.target.value)}
-                className="bg-neutral-900 text-white text-xs px-2.5 py-1 rounded border border-neutral-600 outline-none focus:border-emerald-500 w-36"
-                autoFocus
-              />
-              <button type="submit" className="bg-emerald-600 hover:bg-emerald-500 text-white text-xs px-2.5 py-1 rounded font-medium transition">
-                Sauver
-              </button>
-              <button type="button" onClick={() => setIsCreating(false)} className="text-neutral-400 hover:text-white text-xs px-1.5 py-1 transition">
-                ✕
-              </button>
-            </form>
-          )}
-        </div>
-
-        <div className="flex items-center gap-2">
-          <label htmlFor="red-formation-select" className="text-xs font-semibold text-red-400">
-            Rouges :
-          </label>
-          <select
-            id="red-formation-select"
-            value={selectedRedFormation}
-            onChange={(e) => handleSelectAction('red', e.target.value)}
-            className="bg-neutral-800 text-white text-xs px-3 py-1.5 rounded border border-neutral-700 outline-none focus:border-red-500 cursor-pointer font-medium"
-          >
-            <optgroup label="Formations prédéfinies">
-              {DEFAULT_FORMATIONS.map((f) => (
-                <option key={`red-def-${f.key}`} value={f.key}>{f.key} — {f.team}</option>
-              ))}
-            </optgroup>
-            {Object.keys(customFormations).length > 0 && (
-              <optgroup label="Formations personnalisées ⭐">
-                {Object.keys(customFormations).map((name) => (
-                  <option key={`red-custom-${name}`} value={name}>⭐ {name}</option>
+              <optgroup label="Formations prédéfinies">
+                {DEFAULT_FORMATIONS.map((f) => (
+                  <option key={`blue-def-${f.key}`} value={f.key}>{f.key} — {f.team}</option>
                 ))}
               </optgroup>
-            )}
-            {customFormations[selectedRedFormation] && (
-              <optgroup label="⚙️ Gérer cette tactique">
-                <option value="action:update">💾 Enregistrer les modifications</option>
-                <option value="action:delete">❌ Supprimer la tactique</option>
-              </optgroup>
-            )}
-          </select>
-        </div>
+              {Object.keys(customFormations).length > 0 && (
+                <optgroup label="Formations personnalisées ⭐">
+                  {Object.keys(customFormations).map((name) => (
+                    <option key={`blue-custom-${name}`} value={name}>⭐ {name}</option>
+                  ))}
+                </optgroup>
+              )}
+              {customFormations[selectedBlueFormation] && (
+                <optgroup label="⚙️ Gérer cette tactique">
+                  <option value="action:update">💾 Enregistrer les modifications</option>
+                  <option value="action:delete">❌ Supprimer la tactique</option>
+                </optgroup>
+              )}
+            </select>
+          </div>
 
+          <div className="flex items-center justify-center">
+            {!isCreating ? (
+              <button
+                onClick={() => setIsCreating(true)}
+                className="bg-emerald-600 hover:bg-emerald-500 text-white text-xs px-2.5 py-1 rounded font-medium transition flex items-center gap-1 shadow"
+              >
+                <span className="text-sm font-bold">+</span> Créer
+              </button>
+            ) : (
+              <form onSubmit={handleSaveCustomTactique} className="flex items-center gap-1 bg-neutral-800 p-1 rounded border border-neutral-700">
+                <input
+                  type="text"
+                  placeholder="Nom"
+                  value={newTactiqueName}
+                  onChange={(e) => setNewTactiqueName(e.target.value)}
+                  className="bg-neutral-900 text-white text-xs px-2 py-0.5 rounded border border-neutral-600 outline-none focus:border-emerald-500 w-28"
+                  autoFocus
+                />
+                <button type="submit" className="bg-emerald-600 text-white text-xs px-2 py-0.5 rounded font-medium">OK</button>
+                <button type="button" onClick={() => setIsCreating(false)} className="text-neutral-400 hover:text-white text-xs px-1">✕</button>
+              </form>
+            )}
+          </div>
+
+          <div className="flex items-center gap-2">
+            <label htmlFor="red-formation-select" className="text-xs font-semibold text-red-400">
+              Rouges :
+            </label>
+            <select
+              id="red-formation-select"
+              value={selectedRedFormation}
+              onChange={(e) => handleSelectAction('red', e.target.value)}
+              className="bg-neutral-800 text-white text-xs px-2.5 py-1 rounded border border-neutral-700 outline-none focus:border-red-500 cursor-pointer font-medium"
+            >
+              <optgroup label="Formations prédéfinies">
+                {DEFAULT_FORMATIONS.map((f) => (
+                  <option key={`red-def-${f.key}`} value={f.key}>{f.key} — {f.team}</option>
+                ))}
+              </optgroup>
+              {Object.keys(customFormations).length > 0 && (
+                <optgroup label="Formations personnalisées ⭐">
+                  {Object.keys(customFormations).map((name) => (
+                    <option key={`red-custom-${name}`} value={name}>⭐ {name}</option>
+                  ))}
+                </optgroup>
+              )}
+              {customFormations[selectedRedFormation] && (
+                <optgroup label="⚙️ Gérer cette tactique">
+                  <option value="action:update">💾 Enregistrer les modifications</option>
+                  <option value="action:delete">❌ Supprimer la tactique</option>
+                </optgroup>
+              )}
+            </select>
+          </div>
+
+        </div>
       </div>
 
-      {/* Terrain Konva Responsive avec échelle ajustée sur mobile */}
-      <div ref={containerRef} className="w-full relative border-4 border-white rounded-lg shadow-2xl bg-green-700 flex justify-center items-center overflow-hidden">
-        <Stage
-          width={containerWidth * mobileScaleFactor}
-          height={DESIGN_HEIGHT * scale}
-          scale={{ x: scale, y: scale }}
-        >
-          <Layer>
-            <Rect x={0} y={0} width={DESIGN_WIDTH} height={DESIGN_HEIGHT} fill="#15803d" />
-            <Rect x={10} y={10} width={780} height={480} stroke="#ffffff" strokeWidth={2} />
-            <Rect x={399} y={10} width={2} height={480} fill="#ffffff" />
-            <Circle x={400} y={250} radius={60} stroke="#ffffff" strokeWidth={2} />
-            <Rect x={10} y={130} width={100} height={240} stroke="#ffffff" strokeWidth={2} />
-            <Rect x={690} y={130} width={100} height={240} stroke="#ffffff" strokeWidth={2} />
+      {/* Zone du terrain : occupe tout l'espace restant, le Stage prend exactement la taille mise à l'échelle */}
+      <div ref={fieldAreaRef} className="flex-1 min-h-0 flex items-center justify-center">
+        {scale > 0 && (
+          <div className="border-2 border-white rounded shadow-2xl overflow-hidden">
+            <Stage
+              width={DESIGN_WIDTH * scale}
+              height={DESIGN_HEIGHT * scale}
+              scale={{ x: scale, y: scale }}
+            >
+              <Layer>
+                <Rect x={0} y={0} width={DESIGN_WIDTH} height={DESIGN_HEIGHT} fill="#15803d" />
+                <Rect x={10} y={10} width={780} height={480} stroke="#ffffff" strokeWidth={2} />
+                <Rect x={399} y={10} width={2} height={480} fill="#ffffff" />
+                <Circle x={400} y={250} radius={60} stroke="#ffffff" strokeWidth={2} />
+                <Rect x={10} y={130} width={100} height={240} stroke="#ffffff" strokeWidth={2} />
+                <Rect x={690} y={130} width={100} height={240} stroke="#ffffff" strokeWidth={2} />
 
-            {players.map((player) => {
-              const isSelected = player.id === selectedPlayerId;
-              return (
-                <Group
-                  key={player.id}
-                  x={player.x}
-                  y={player.y}
-                  draggable
-                  onClick={() => setSelectedPlayerId(player.id)}
-                  onTap={() => setSelectedPlayerId(player.id)}
-                  onDragStart={(e: any) => handleDragStart(e, player.id)}
-                  onDragEnd={(e: any) => handleDragEnd(e, player.id)}
-                >
-                  <Circle
-                    radius={20}
-                    fill={player.color}
-                    shadowBlur={8}
-                    shadowColor="black"
-                    shadowOpacity={0.6}
-                    stroke={isSelected ? '#facc15' : '#ffffff'}
-                    strokeWidth={isSelected ? 3.5 : 2}
-                  />
-                  <Text text={player.number} fontSize={13} fontStyle="bold" fill="#ffffff" x={player.number.length > 1 ? -8 : -4} y={-6} />
-                  <Text text={player.name} fontSize={10} fill="#ffffff" x={-25} y={22} width={50} align="center" />
-                </Group>
-              );
-            })}
-          </Layer>
-        </Stage>
+                {players.map((player) => {
+                  const isSelected = player.id === selectedPlayerId;
+                  return (
+                    <Group
+                      key={player.id}
+                      x={player.x}
+                      y={player.y}
+                      draggable
+                      onClick={() => setSelectedPlayerId(player.id)}
+                      onTap={() => setSelectedPlayerId(player.id)}
+                      onDragStart={(e: any) => handleDragStart(e, player.id)}
+                      onDragEnd={(e: any) => handleDragEnd(e, player.id)}
+                    >
+                      <Circle
+                        radius={20}
+                        fill={player.color}
+                        shadowBlur={8}
+                        shadowColor="black"
+                        shadowOpacity={0.6}
+                        stroke={isSelected ? '#facc15' : '#ffffff'}
+                        strokeWidth={isSelected ? 3.5 : 2}
+                      />
+                      <Text text={player.number} fontSize={13} fontStyle="bold" fill="#ffffff" x={player.number.length > 1 ? -8 : -4} y={-6} />
+                      <Text text={player.name} fontSize={10} fill="#ffffff" x={-25} y={22} width={50} align="center" />
+                    </Group>
+                  );
+                })}
+              </Layer>
+            </Stage>
+          </div>
+        )}
       </div>
 
       {selectedPlayer && (
-        <div className="flex items-center justify-between gap-4 bg-neutral-900 border border-neutral-800 p-3 rounded-lg w-full">
+        <div className="absolute bottom-2 left-1/2 -translate-x-1/2 flex items-center justify-between gap-3 bg-neutral-900/95 border border-neutral-800 px-4 py-2 rounded-lg z-30 shadow-xl">
           <div className="flex items-center gap-2">
-            <div className="w-4 h-4 rounded-full border border-white" style={{ backgroundColor: selectedPlayer.color }} />
-            <span className="text-sm font-semibold text-white">Édition : #{selectedPlayer.number} ({selectedPlayer.id.startsWith('b-') ? 'Bleu' : 'Rouge'})</span>
+            <div className="w-3.5 h-3.5 rounded-full border border-white" style={{ backgroundColor: selectedPlayer.color }} />
+            <span className="text-xs font-semibold text-white">#{selectedPlayer.number}</span>
           </div>
 
-          <div className="flex items-center gap-3">
-            <div className="flex items-center gap-1">
-              <label className="text-xs text-neutral-400">N° :</label>
-              <input type="text" value={selectedPlayer.number} onChange={(e) => updateSelectedPlayer('number', e.target.value)} className="w-12 bg-neutral-800 border border-neutral-700 px-2 py-1 text-xs rounded text-center text-white outline-none focus:border-blue-500" />
-            </div>
-
-            <div className="flex items-center gap-1">
-              <label className="text-xs text-neutral-400">Nom / Rôle :</label>
-              <input type="text" value={selectedPlayer.name} onChange={(e) => updateSelectedPlayer('name', e.target.value)} className="w-36 bg-neutral-800 border border-neutral-700 px-2 py-1 text-xs rounded text-white outline-none focus:border-blue-500" />
-            </div>
-
-            <button onClick={() => setSelectedPlayerId(null)} className="text-xs text-neutral-400 hover:text-white px-2 py-1 bg-neutral-800 rounded transition">OK</button>
+          <div className="flex items-center gap-2">
+            <input type="text" value={selectedPlayer.number} onChange={(e) => updateSelectedPlayer('number', e.target.value)} className="w-10 bg-neutral-800 border border-neutral-700 px-1.5 py-0.5 text-xs rounded text-center text-white outline-none focus:border-blue-500" />
+            <input type="text" value={selectedPlayer.name} onChange={(e) => updateSelectedPlayer('name', e.target.value)} className="w-28 bg-neutral-800 border border-neutral-700 px-2 py-0.5 text-xs rounded text-white outline-none focus:border-blue-500" />
+            <button onClick={() => setSelectedPlayerId(null)} className="text-xs text-neutral-400 hover:text-white px-2 py-0.5 bg-neutral-800 rounded transition">OK</button>
           </div>
         </div>
       )}
