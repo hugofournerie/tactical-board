@@ -1,7 +1,7 @@
 'use client';
 // @ts-nocheck
 import React, { useState, useEffect, useRef } from 'react';
-import { Stage, Layer, Rect, Circle, Text, Group } from 'react-konva';
+import { Stage, Layer, Rect, Circle, Text, Group, Arrow } from 'react-konva';
 
 interface Player {
   id: string;
@@ -12,10 +12,23 @@ interface Player {
   name: string;
 }
 
+interface CustomShape {
+  id: string;
+  type: 'arrow' | 'dashed-arrow' | 'rect' | 'circle' | 'text';
+  x: number;
+  y: number;
+  width?: number;
+  height?: number;
+  radius?: number;
+  points?: number[];
+  color: string;
+  text?: string;
+}
+
 const MIN_DISTANCE = 44;
 const DESIGN_WIDTH = 800;
 const DESIGN_HEIGHT = 500;
-const FIELD_MARGIN = 12; // marge de sécurité autour du terrain (bordure incluse)
+const FIELD_MARGIN = 12;
 
 const DEFAULT_FORMATIONS = [
   { key: '4-3-3', team: 'PSG' },
@@ -237,8 +250,6 @@ export default function TacticalCanvas() {
   const [scale, setScale] = useState<number>(0);
   const fieldAreaRef = useRef<HTMLDivElement>(null);
 
-  // Mesure la zone réellement disponible pour le terrain (sous la barre du haut)
-  // et adapte l'échelle pour que le terrain entier, coins compris, soit visible.
   useEffect(() => {
     const el = fieldAreaRef.current;
     if (!el) return;
@@ -265,6 +276,11 @@ export default function TacticalCanvas() {
 
   const [tactiqueToDelete, setTactiqueToDelete] = useState<string | null>(null);
   const [toastMessage, setToastMessage] = useState<string | null>(null);
+
+  // Formes dessinées sur le terrain
+  const [shapes, setShapes] = useState<CustomShape[]>([]);
+  const [selectedShapeId, setSelectedShapeId] = useState<string | null>(null);
+  const [isShapeMenuOpen, setIsShapeMenuOpen] = useState<boolean>(false);
 
   useEffect(() => {
     const saved = localStorage.getItem('custom_tactical_formations');
@@ -300,7 +316,26 @@ export default function TacticalCanvas() {
   });
 
   const [selectedPlayerId, setSelectedPlayerId] = useState<string | null>(null);
-  const selectedPlayer = players.find((p) => p.id === selectedPlayerId);
+
+  const addShape = (type: CustomShape['type']) => {
+    const id = `shape-${Date.now()}`;
+    const newShape: CustomShape = {
+      id,
+      type,
+      x: 360,
+      y: 220,
+      color: '#f59e0b',
+      text: type === 'text' ? 'Annotation' : undefined,
+      points: type.includes('arrow') ? [0, 0, 80, 0] : undefined,
+      width: type === 'rect' ? 120 : undefined,
+      height: type === 'rect' ? 70 : undefined,
+      radius: type === 'circle' ? 40 : undefined,
+    };
+    setShapes((prev) => [...prev, newShape]);
+    setSelectedShapeId(id);
+    setSelectedPlayerId(null);
+    setIsShapeMenuOpen(false);
+  };
 
   const handleSelectAction = (team: 'blue' | 'red', value: string) => {
     const isBlue = team === 'blue';
@@ -382,6 +417,7 @@ export default function TacticalCanvas() {
 
   const handleDragStart = (e: any, id: string) => {
     setSelectedPlayerId(id);
+    setSelectedShapeId(null);
     e.target.moveToTop();
   };
 
@@ -436,13 +472,6 @@ export default function TacticalCanvas() {
     });
   };
 
-  const updateSelectedPlayer = (field: 'name' | 'number', value: string) => {
-    if (!selectedPlayerId) return;
-    setPlayers((prev) =>
-      prev.map((p) => (p.id === selectedPlayerId ? { ...p, [field]: value } : p))
-    );
-  };
-
   return (
     <div className="fixed inset-0 flex flex-col overflow-hidden bg-neutral-950 select-none">
 
@@ -477,10 +506,72 @@ export default function TacticalCanvas() {
         </div>
       )}
 
-      {/* Barre de contrôles du haut (dans le flux, ne recouvre plus le terrain) */}
-      <div className="shrink-0 flex justify-center px-2 pt-1.5 pb-1 z-30">
-        <div className="flex flex-wrap items-center justify-center gap-3 bg-neutral-900/90 backdrop-blur-md px-4 py-1.5 rounded-full border border-neutral-800 shadow-lg">
+      {/* Barre de contrôles du haut avec Menu Formes intégré */}
+      <div className="shrink-0 flex justify-center px-2 pt-2 pb-1 z-50">
+        <div className="flex flex-wrap items-center justify-center gap-3 bg-neutral-900/90 backdrop-blur-md px-4 py-1.5 rounded-full border border-neutral-800 shadow-lg relative">
 
+          {/* Menu Formes */}
+          <div className="relative">
+            <button
+              onClick={() => setIsShapeMenuOpen(!isShapeMenuOpen)}
+              className="bg-neutral-800 hover:bg-neutral-700 text-amber-400 border border-neutral-700 px-2.5 py-1 rounded-full text-xs font-semibold flex items-center gap-1.5 transition active:scale-95"
+            >
+              <span>🔷 Formes</span>
+              <span className="text-[10px] text-neutral-400">▼</span>
+            </button>
+
+            {isShapeMenuOpen && (
+              <div className="absolute left-0 top-full mt-2 w-48 bg-neutral-900 border border-neutral-700 rounded-lg shadow-2xl overflow-hidden text-xs py-1 z-50">
+                <div className="px-3 py-1 text-[10px] font-bold text-neutral-400 uppercase tracking-wider">
+                  Lignes & Flèches
+                </div>
+                <button
+                  onClick={() => addShape('arrow')}
+                  className="w-full text-left px-3 py-1.5 hover:bg-neutral-800 text-neutral-200 flex items-center gap-2 transition"
+                >
+                  <span className="text-amber-400">➔</span> Flèche continue
+                </button>
+                <button
+                  onClick={() => addShape('dashed-arrow')}
+                  className="w-full text-left px-3 py-1.5 hover:bg-neutral-800 text-neutral-200 flex items-center gap-2 transition"
+                >
+                  <span className="text-amber-400">⇢</span> Flèche pointillée
+                </button>
+
+                <div className="border-t border-neutral-800 my-1" />
+                <div className="px-3 py-1 text-[10px] font-bold text-neutral-400 uppercase tracking-wider">
+                  Zones & Formes
+                </div>
+                <button
+                  onClick={() => addShape('rect')}
+                  className="w-full text-left px-3 py-1.5 hover:bg-neutral-800 text-neutral-200 flex items-center gap-2 transition"
+                >
+                  <span className="text-amber-400">▭</span> Zone Rectangulaire
+                </button>
+                <button
+                  onClick={() => addShape('circle')}
+                  className="w-full text-left px-3 py-1.5 hover:bg-neutral-800 text-neutral-200 flex items-center gap-2 transition"
+                >
+                  <span className="text-amber-400">◯</span> Zone Circulaire
+                </button>
+
+                <div className="border-t border-neutral-800 my-1" />
+                <div className="px-3 py-1 text-[10px] font-bold text-neutral-400 uppercase tracking-wider">
+                  Texte
+                </div>
+                <button
+                  onClick={() => addShape('text')}
+                  className="w-full text-left px-3 py-1.5 hover:bg-neutral-800 text-neutral-200 flex items-center gap-2 transition"
+                >
+                  <span className="text-amber-400">✎</span> Annotation / Texte
+                </button>
+              </div>
+            )}
+          </div>
+
+          <div className="h-4 w-px bg-neutral-800 my-auto" />
+
+          {/* Choix des Bleus */}
           <div className="flex items-center gap-2">
             <label htmlFor="blue-formation-select" className="text-xs font-semibold text-blue-400">
               Bleus :
@@ -512,6 +603,7 @@ export default function TacticalCanvas() {
             </select>
           </div>
 
+          {/* Bouton Créer */}
           <div className="flex items-center justify-center">
             {!isCreating ? (
               <button
@@ -536,6 +628,7 @@ export default function TacticalCanvas() {
             )}
           </div>
 
+          {/* Choix des Rouges */}
           <div className="flex items-center gap-2">
             <label htmlFor="red-formation-select" className="text-xs font-semibold text-red-400">
               Rouges :
@@ -570,7 +663,7 @@ export default function TacticalCanvas() {
         </div>
       </div>
 
-      {/* Zone du terrain : occupe tout l'espace restant, le Stage prend exactement la taille mise à l'échelle */}
+      {/* Zone du terrain */}
       <div ref={fieldAreaRef} className="flex-1 min-h-0 flex items-center justify-center">
         {scale > 0 && (
           <div className="border-2 border-white rounded shadow-2xl overflow-hidden">
@@ -580,6 +673,7 @@ export default function TacticalCanvas() {
               scale={{ x: scale, y: scale }}
             >
               <Layer>
+                {/* Terrain de football */}
                 <Rect x={0} y={0} width={DESIGN_WIDTH} height={DESIGN_HEIGHT} fill="#15803d" />
                 <Rect x={10} y={10} width={780} height={480} stroke="#ffffff" strokeWidth={2} />
                 <Rect x={399} y={10} width={2} height={480} fill="#ffffff" />
@@ -587,6 +681,136 @@ export default function TacticalCanvas() {
                 <Rect x={10} y={130} width={100} height={240} stroke="#ffffff" strokeWidth={2} />
                 <Rect x={690} y={130} width={100} height={240} stroke="#ffffff" strokeWidth={2} />
 
+                {/* Formes dessinées */}
+                {shapes.map((shape) => {
+                  const isSelected = shape.id === selectedShapeId;
+
+                  if (shape.type === 'arrow' || shape.type === 'dashed-arrow') {
+                    return (
+                      <Arrow
+                        key={shape.id}
+                        x={shape.x}
+                        y={shape.y}
+                        points={shape.points || [0, 0, 80, 0]}
+                        pointerLength={10}
+                        pointerWidth={10}
+                        fill={shape.color}
+                        stroke={shape.color}
+                        strokeWidth={3}
+                        dash={shape.type === 'dashed-arrow' ? [6, 6] : undefined}
+                        draggable
+                        onClick={() => {
+                          setSelectedShapeId(shape.id);
+                          setSelectedPlayerId(null);
+                        }}
+                        onTap={() => {
+                          setSelectedShapeId(shape.id);
+                          setSelectedPlayerId(null);
+                        }}
+                        onDragEnd={(e) => {
+                          const { x, y } = e.target.position();
+                          setShapes((prev) =>
+                            prev.map((s) => (s.id === shape.id ? { ...s, x, y } : s))
+                          );
+                        }}
+                      />
+                    );
+                  }
+
+                  if (shape.type === 'rect') {
+                    return (
+                      <Rect
+                        key={shape.id}
+                        x={shape.x}
+                        y={shape.y}
+                        width={shape.width || 120}
+                        height={shape.height || 70}
+                        fill={shape.color + '33'}
+                        stroke={isSelected ? '#facc15' : shape.color}
+                        strokeWidth={isSelected ? 3 : 2}
+                        dash={[5, 5]}
+                        draggable
+                        onClick={() => {
+                          setSelectedShapeId(shape.id);
+                          setSelectedPlayerId(null);
+                        }}
+                        onTap={() => {
+                          setSelectedShapeId(shape.id);
+                          setSelectedPlayerId(null);
+                        }}
+                        onDragEnd={(e) => {
+                          const { x, y } = e.target.position();
+                          setShapes((prev) =>
+                            prev.map((s) => (s.id === shape.id ? { ...s, x, y } : s))
+                          );
+                        }}
+                      />
+                    );
+                  }
+
+                  if (shape.type === 'circle') {
+                    return (
+                      <Circle
+                        key={shape.id}
+                        x={shape.x}
+                        y={shape.y}
+                        radius={shape.radius || 40}
+                        fill={shape.color + '33'}
+                        stroke={isSelected ? '#facc15' : shape.color}
+                        strokeWidth={isSelected ? 3 : 2}
+                        dash={[5, 5]}
+                        draggable
+                        onClick={() => {
+                          setSelectedShapeId(shape.id);
+                          setSelectedPlayerId(null);
+                        }}
+                        onTap={() => {
+                          setSelectedShapeId(shape.id);
+                          setSelectedPlayerId(null);
+                        }}
+                        onDragEnd={(e) => {
+                          const { x, y } = e.target.position();
+                          setShapes((prev) =>
+                            prev.map((s) => (s.id === shape.id ? { ...s, x, y } : s))
+                          );
+                        }}
+                      />
+                    );
+                  }
+
+                  if (shape.type === 'text') {
+                    return (
+                      <Text
+                        key={shape.id}
+                        x={shape.x}
+                        y={shape.y}
+                        text={shape.text || 'Annotation'}
+                        fontSize={14}
+                        fill={shape.color}
+                        fontStyle="bold"
+                        draggable
+                        onClick={() => {
+                          setSelectedShapeId(shape.id);
+                          setSelectedPlayerId(null);
+                        }}
+                        onTap={() => {
+                          setSelectedShapeId(shape.id);
+                          setSelectedPlayerId(null);
+                        }}
+                        onDragEnd={(e) => {
+                          const { x, y } = e.target.position();
+                          setShapes((prev) =>
+                            prev.map((s) => (s.id === shape.id ? { ...s, x, y } : s))
+                          );
+                        }}
+                      />
+                    );
+                  }
+
+                  return null;
+                })}
+
+                {/* Joueurs */}
                 {players.map((player) => {
                   const isSelected = player.id === selectedPlayerId;
                   return (
@@ -595,22 +819,43 @@ export default function TacticalCanvas() {
                       x={player.x}
                       y={player.y}
                       draggable
-                      onClick={() => setSelectedPlayerId(player.id)}
-                      onTap={() => setSelectedPlayerId(player.id)}
-                      onDragStart={(e: any) => handleDragStart(e, player.id)}
-                      onDragEnd={(e: any) => handleDragEnd(e, player.id)}
+                      onDragStart={(e) => handleDragStart(e, player.id)}
+                      onDragEnd={(e) => handleDragEnd(e, player.id)}
+                      onClick={() => {
+                        setSelectedPlayerId(player.id);
+                        setSelectedShapeId(null);
+                      }}
+                      onTap={() => {
+                        setSelectedPlayerId(player.id);
+                        setSelectedShapeId(null);
+                      }}
                     >
                       <Circle
-                        radius={20}
+                        radius={16}
                         fill={player.color}
-                        shadowBlur={8}
-                        shadowColor="black"
-                        shadowOpacity={0.6}
                         stroke={isSelected ? '#facc15' : '#ffffff'}
-                        strokeWidth={isSelected ? 3.5 : 2}
+                        strokeWidth={isSelected ? 3 : 2}
+                        shadowBlur={isSelected ? 10 : 2}
+                        shadowColor="black"
                       />
-                      <Text text={player.number} fontSize={13} fontStyle="bold" fill="#ffffff" x={player.number.length > 1 ? -8 : -4} y={-6} />
-                      <Text text={player.name} fontSize={10} fill="#ffffff" x={-25} y={22} width={50} align="center" />
+                      <Text
+                        text={player.number}
+                        fontSize={12}
+                        fontStyle="bold"
+                        fill="#ffffff"
+                        align="center"
+                        verticalAlign="middle"
+                        offsetX={player.number.length > 1 ? 7 : 4}
+                        offsetY={5}
+                      />
+                      <Text
+                        text={player.name}
+                        fontSize={10}
+                        fill="#ffffff"
+                        align="center"
+                        y={20}
+                        offsetX={player.name.length * 2.5}
+                      />
                     </Group>
                   );
                 })}
@@ -620,20 +865,6 @@ export default function TacticalCanvas() {
         )}
       </div>
 
-      {selectedPlayer && (
-        <div className="absolute bottom-2 left-1/2 -translate-x-1/2 flex items-center justify-between gap-3 bg-neutral-900/95 border border-neutral-800 px-4 py-2 rounded-lg z-30 shadow-xl">
-          <div className="flex items-center gap-2">
-            <div className="w-3.5 h-3.5 rounded-full border border-white" style={{ backgroundColor: selectedPlayer.color }} />
-            <span className="text-xs font-semibold text-white">#{selectedPlayer.number}</span>
-          </div>
-
-          <div className="flex items-center gap-2">
-            <input type="text" value={selectedPlayer.number} onChange={(e) => updateSelectedPlayer('number', e.target.value)} className="w-10 bg-neutral-800 border border-neutral-700 px-1.5 py-0.5 text-xs rounded text-center text-white outline-none focus:border-blue-500" />
-            <input type="text" value={selectedPlayer.name} onChange={(e) => updateSelectedPlayer('name', e.target.value)} className="w-28 bg-neutral-800 border border-neutral-700 px-2 py-0.5 text-xs rounded text-white outline-none focus:border-blue-500" />
-            <button onClick={() => setSelectedPlayerId(null)} className="text-xs text-neutral-400 hover:text-white px-2 py-0.5 bg-neutral-800 rounded transition">OK</button>
-          </div>
-        </div>
-      )}
     </div>
   );
 }
