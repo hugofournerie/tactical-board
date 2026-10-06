@@ -1,6 +1,6 @@
 'use client';
 // @ts-nocheck
-import React, { useState, useEffect, useRef } from 'react';
+import React, { useState, useEffect, useRef, useCallback } from 'react';
 import { Stage, Layer, Rect, Circle, Text, Group, Arrow, Line, Transformer } from 'react-konva';
 
 interface Player {
@@ -28,6 +28,19 @@ interface CustomShape {
   scaleX?: number;
   scaleY?: number;
   penType?: 'pen' | 'highlighter' | 'dashed';
+}
+
+interface HistorySnapshot {
+  players: Player[];
+  shapes: CustomShape[];
+}
+
+interface ContextMenuState {
+  visible: boolean;
+  x: number;
+  y: number;
+  targetId: string | null;
+  targetType: 'shape' | 'player' | null;
 }
 
 const MIN_DISTANCE = 44;
@@ -252,7 +265,7 @@ const FORMATIONS_RED: Record<string, { x: number; y: number; number: string; nam
 );
 
 export default function TacticalCanvas() {
-  const [scale, setScale] = useState<number>(0);
+  const [scale, setScale] = useState<number>(1);
   const fieldAreaRef = useRef<HTMLDivElement>(null);
   const stageRef = useRef<any>(null);
   const shapeRef = useRef<any>(null);
@@ -297,24 +310,7 @@ export default function TacticalCanvas() {
   const [drawWidth, setDrawWidth] = useState<number>(4);
   const isDrawingRef = useRef<boolean>(false);
 
-  useEffect(() => {
-    if (selectedShapeId && trRef.current && shapeRef.current) {
-      trRef.current.nodes([shapeRef.current]);
-      trRef.current.getLayer().batchDraw();
-    }
-  }, [selectedShapeId]);
-
-  useEffect(() => {
-    const saved = localStorage.getItem('custom_tactical_formations');
-    if (saved) {
-      try {
-        setCustomFormations(JSON.parse(saved));
-      } catch (e) {
-        console.error('Erreur de chargement des tactiques :', e);
-      }
-    }
-  }, []);
-
+  // Joueurs
   const [players, setPlayers] = useState<Player[]>(() => {
     const initialPlayers: Player[] = [
       ...FORMATIONS_BLUE['4-3-3'].map((p, idx) => ({
@@ -339,7 +335,146 @@ export default function TacticalCanvas() {
 
   const [selectedPlayerId, setSelectedPlayerId] = useState<string | null>(null);
 
-  const selectedShape = shapes.find((s) => s.id === selectedShapeId);
+  // --- GESTION DE L'HISTORIQUE (UNDO) ---
+  const [history, setHistory] = useState<HistorySnapshot[]>([
+    { players: [...players], shapes: [] },
+  ]);
+  const [historyIndex, setHistoryIndex] = useState<number>(0);
+
+  const saveToHistory = useCallback((newPlayers: Player[], newShapes: CustomShape[]) => {
+    setHistory((prev) => {
+      const nextHistory = prev.slice(0, historyIndex + 1);
+      return [...nextHistory, { players: newPlayers, shapes: newShapes }];
+    });
+    setHistoryIndex((prev) => prev + 1);
+  }, [historyIndex]);
+
+  const undo = useCallback(() => {
+    if (historyIndex > 0) {
+      const prevIndex = historyIndex - 1;
+      const targetState = history[prevIndex];
+      setPlayers(targetState.players);
+      setShapes(targetState.shapes);
+      setHistoryIndex(prevIndex);
+      setSelectedShapeId(null);
+      setSelectedPlayerId(null);
+      setContextMenu((prev) => ({ ...prev, visible: false }));
+    }
+  }, [history, historyIndex]);
+
+  // --- MENU CONTEXTUEL (CLIC DROIT / MAINTIEN MOBILE) ---
+  const [contextMenu, setContextMenu] = useState<ContextMenuState>({
+    visible: false,
+    x: 0,
+    y: 0,
+    targetId: null,
+    targetType: null,
+  });
+
+  const longPressTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  // Fermeture du menu contextuel au clic extérieur
+  useEffect(() => {
+    const handleGlobalClick = () => setContextMenu((prev) => ({ ...prev, visible: false }));
+    window.addEventListener('click', handleGlobalClick);
+    return () => window.removeEventListener('click', handleGlobalClick);
+  }, []);
+
+  // --- SUPPRESSION & MODIFICATION ---
+  const deleteTarget = useCallback((id: string, type: 'shape' | 'player') => {
+    if (type === 'shape') {
+      const newShapes = shapes.filter((s) => s.id !== id);
+      setShapes(newShapes);
+      setSelectedShapeId(null);
+      saveToHistory(players, newShapes);
+    } else if (type === 'player') {
+      const newPlayers = players.filter((p) => p.id !== id);
+      setPlayers(newPlayers);
+      setSelectedPlayerId(null);
+      saveToHistory(newPlayers, shapes);
+    }
+    setContextMenu((prev) => ({ ...prev, visible: false }));
+  }, [shapes, players, saveToHistory]);
+
+  const modifyTarget = (id: string, type: 'shape' | 'player') => {
+    if (type === 'shape') {
+      const shape = shapes.find((s) => s.id === id);
+      if (!shape) return;
+      const newText = prompt('Texte ou annotation :', shape.text || '');
+      const newColor = prompt('Couleur hex ou nom :', shape.color || '#f59e0b');
+      if (newText !== null || newColor !== null) {
+        const updatedShapes = shapes.map((s) =>
+          s.id === id
+            ? { ...s, text: newText !== null ? newText : s.text, color: newColor || s.color }
+            : s
+        );
+        setShapes(updatedShapes);
+        saveToHistory(players, updatedShapes);
+      }
+    } else if (type === 'player') {
+      const player = players.find((p) => p.id === id);
+      if (!player) return;
+      const newNumber = prompt('Numéro du joueur :', player.number);
+      const newName = prompt('Nom du joueur :', player.name);
+      if (newNumber !== null || newName !== null) {
+        const updatedPlayers = players.map((p) =>
+          p.id === id
+            ? { ...p, number: newNumber !== null ? newNumber : p.number, name: newName !== null ? newName : p.name }
+            : p
+        );
+        setPlayers(updatedPlayers);
+        saveToHistory(updatedPlayers, shapes);
+      }
+    }
+    setContextMenu((prev) => ({ ...prev, visible: false }));
+  };
+
+  // --- RACCOURCIS CLAVIER GLOBAL (Ctrl+Z, Cmd+Z, Suppr, Backspace) ---
+  useEffect(() => {
+    const handleKeyDown = (e: KeyboardEvent) => {
+      const target = e.target as HTMLElement;
+      const isEditingText = target && (target.tagName === 'INPUT' || target.tagName === 'TEXTAREA' || target.isContentEditable);
+      if (isEditingText) return;
+
+      const isCmdOrCtrl = e.ctrlKey || e.metaKey;
+
+      if (isCmdOrCtrl && e.key.toLowerCase() === 'z') {
+        e.preventDefault();
+        undo();
+      }
+
+      if (e.key === 'Delete' || e.key === 'Backspace') {
+        if (selectedShapeId) {
+          e.preventDefault();
+          deleteTarget(selectedShapeId, 'shape');
+        } else if (selectedPlayerId) {
+          e.preventDefault();
+          deleteTarget(selectedPlayerId, 'player');
+        }
+      }
+    };
+
+    window.addEventListener('keydown', handleKeyDown);
+    return () => window.removeEventListener('keydown', handleKeyDown);
+  }, [undo, selectedShapeId, selectedPlayerId, deleteTarget]);
+
+  useEffect(() => {
+    if (selectedShapeId && trRef.current && shapeRef.current) {
+      trRef.current.nodes([shapeRef.current]);
+      trRef.current.getLayer().batchDraw();
+    }
+  }, [selectedShapeId]);
+
+  useEffect(() => {
+    const saved = localStorage.getItem('custom_tactical_formations');
+    if (saved) {
+      try {
+        setCustomFormations(JSON.parse(saved));
+      } catch (e) {
+        console.error('Erreur de chargement des tactiques :', e);
+      }
+    }
+  }, []);
 
   // Export d'image (terrain + formes + joueurs uniquement)
   const handleExportImage = () => {
@@ -378,10 +513,12 @@ export default function TacticalCanvas() {
       scaleX: 1,
       scaleY: 1,
     };
-    setShapes((prev) => [...prev, newShape]);
+    const updatedShapes = [...shapes, newShape];
+    setShapes(updatedShapes);
     setSelectedShapeId(id);
     setSelectedPlayerId(null);
     setIsShapeMenuOpen(false);
+    saveToHistory(players, updatedShapes);
   };
 
   // Événements de dessin libre à la souris
@@ -441,20 +578,10 @@ export default function TacticalCanvas() {
   };
 
   const handleStageMouseUp = () => {
-    isDrawingRef.current = false;
-  };
-
-  const updateSelectedShape = (fields: Partial<CustomShape>) => {
-    if (!selectedShapeId) return;
-    setShapes((prev) =>
-      prev.map((s) => (s.id === selectedShapeId ? { ...s, ...fields } : s))
-    );
-  };
-
-  const deleteSelectedShape = () => {
-    if (!selectedShapeId) return;
-    setShapes((prev) => prev.filter((s) => s.id !== selectedShapeId));
-    setSelectedShapeId(null);
+    if (isDrawingRef.current) {
+      isDrawingRef.current = false;
+      saveToHistory(players, shapes);
+    }
   };
 
   const handleSelectAction = (team: 'blue' | 'red', value: string) => {
@@ -550,10 +677,65 @@ export default function TacticalCanvas() {
     targetX = Math.max(30, Math.min(770, targetX));
     targetY = Math.max(30, Math.min(470, targetY));
 
-    setPlayers((prev) => {
-      const updated = prev.map((p) => (p.id === id ? { ...p, x: targetX, y: targetY } : p));
-      return resolveCollisions(updated);
+    const updatedPlayers = resolveCollisions(
+      players.map((p) => (p.id === id ? { ...p, x: targetX, y: targetY } : p))
+    );
+    setPlayers(updatedPlayers);
+    saveToHistory(updatedPlayers, shapes);
+  };
+
+  // HANDLERS TACTILE ET CLIC DROIT POUR PITCH ITEMS
+  const handleItemContextMenu = (e: any, id: string, type: 'shape' | 'player') => {
+    e.evt.preventDefault();
+    e.evt.stopPropagation();
+    const evt = e.evt;
+
+    if (type === 'shape') {
+      setSelectedShapeId(id);
+      setSelectedPlayerId(null);
+    } else {
+      setSelectedPlayerId(id);
+      setSelectedShapeId(null);
+    }
+
+    setContextMenu({
+      visible: true,
+      x: evt.clientX,
+      y: evt.clientY,
+      targetId: id,
+      targetType: type,
     });
+  };
+
+  const handleItemTouchStart = (e: any, id: string, type: 'shape' | 'player') => {
+    const evt = e.evt;
+    if (!evt.touches || evt.touches.length !== 1) return;
+    const touch = evt.touches[0];
+
+    longPressTimerRef.current = setTimeout(() => {
+      if (type === 'shape') {
+        setSelectedShapeId(id);
+        setSelectedPlayerId(null);
+      } else {
+        setSelectedPlayerId(id);
+        setSelectedShapeId(null);
+      }
+
+      setContextMenu({
+        visible: true,
+        x: touch.clientX,
+        y: touch.clientY,
+        targetId: id,
+        targetType: type,
+      });
+    }, 500);
+  };
+
+  const clearLongPress = () => {
+    if (longPressTimerRef.current) {
+      clearTimeout(longPressTimerRef.current);
+      longPressTimerRef.current = null;
+    }
   };
 
   const applyFormation = (team: 'blue' | 'red', formationKey: string) => {
@@ -574,8 +756,8 @@ export default function TacticalCanvas() {
 
     if (!formation) return;
 
-    setPlayers((prev) => {
-      const updated = prev.map((player) => {
+    const updatedPlayers = resolveCollisions(
+      players.map((player) => {
         if (player.id.startsWith(prefix)) {
           const index = parseInt(player.id.replace(prefix, '')) - 1;
           if (formation[index]) {
@@ -589,9 +771,10 @@ export default function TacticalCanvas() {
           }
         }
         return player;
-      });
-      return resolveCollisions(updated);
-    });
+      })
+    );
+    setPlayers(updatedPlayers);
+    saveToHistory(updatedPlayers, shapes);
   };
 
   return (
@@ -632,6 +815,21 @@ export default function TacticalCanvas() {
       <div className="shrink-0 flex justify-center px-2 pt-2 pb-1 z-50">
         <div className="flex flex-wrap items-center justify-center gap-3 bg-neutral-900/90 backdrop-blur-md px-4 py-1.5 rounded-full border border-neutral-800 shadow-lg relative">
 
+          {/* Bouton Annuler (Ctrl+Z) */}
+          <button
+            onClick={undo}
+            disabled={historyIndex <= 0}
+            className={`px-3 py-1 rounded-full text-xs font-semibold border transition ${
+              historyIndex > 0
+                ? 'bg-neutral-800 hover:bg-neutral-700 text-white border-neutral-700 active:scale-95'
+                : 'bg-neutral-900 text-neutral-600 border-neutral-800 cursor-not-allowed'
+            }`}
+          >
+            ↶ Annuler (Ctrl+Z)
+          </button>
+
+          <div className="h-4 w-px bg-neutral-800 my-auto" />
+
           {/* Menu Formes & Dessin */}
           <div className="relative">
             <button
@@ -648,8 +846,6 @@ export default function TacticalCanvas() {
 
             {isShapeMenuOpen && (
               <div className="absolute left-0 top-full mt-2 w-52 bg-neutral-900 border border-neutral-700 rounded-lg shadow-2xl overflow-hidden text-xs py-1 z-50">
-                
-                {/* Onglet / Option Dessin Libre */}
                 <div className="px-3 py-1 text-[10px] font-bold text-amber-400 uppercase tracking-wider">
                   ✏️ Dessin à la main
                 </div>
@@ -813,490 +1009,276 @@ export default function TacticalCanvas() {
           <button
             onClick={handleExportImage}
             className="bg-sky-600 hover:bg-sky-500 text-white px-3 py-1 rounded-full text-xs font-semibold flex items-center gap-1.5 transition shadow"
-            title="Enregistrer une capture du terrain au format image PNG"
           >
-            <span>📸</span> Enregistrer l'image
+            📸 Exporter PNG
           </button>
-
         </div>
       </div>
-
-      {/* Barre d'outils de dessin libre (lorsque le mode dessin est actif) */}
-      {isDrawMode && (
-        <div className="shrink-0 flex justify-center px-2 py-1 z-40">
-          <div className="flex flex-wrap items-center gap-3 bg-amber-950/80 border border-amber-500/50 px-4 py-1.5 rounded-full shadow-lg text-xs">
-            <span className="text-amber-400 font-bold flex items-center gap-1">
-              ✏️ Options de dessin :
-            </span>
-
-            {/* Type de stylo */}
-            <div className="flex items-center gap-1 bg-neutral-900/60 p-0.5 rounded-lg border border-neutral-800">
-              <button
-                onClick={() => setPenType('pen')}
-                className={`px-2 py-0.5 rounded text-[11px] font-medium transition ${
-                  penType === 'pen' ? 'bg-amber-500 text-neutral-950 font-bold' : 'text-neutral-300 hover:text-white'
-                }`}
-              >
-                Stylo
-              </button>
-              <button
-                onClick={() => setPenType('highlighter')}
-                className={`px-2 py-0.5 rounded text-[11px] font-medium transition ${
-                  penType === 'highlighter' ? 'bg-amber-500 text-neutral-950 font-bold' : 'text-neutral-300 hover:text-white'
-                }`}
-              >
-                Surligneur
-              </button>
-              <button
-                onClick={() => setPenType('dashed')}
-                className={`px-2 py-0.5 rounded text-[11px] font-medium transition ${
-                  penType === 'dashed' ? 'bg-amber-500 text-neutral-950 font-bold' : 'text-neutral-300 hover:text-white'
-                }`}
-              >
-                Pointillé
-              </button>
-            </div>
-
-            {/* Couleur */}
-            <div className="flex items-center gap-1.5 border-l border-neutral-800 pl-2">
-              <span className="text-neutral-300">Couleur :</span>
-              <input
-                type="color"
-                value={drawColor}
-                onChange={(e) => setDrawColor(e.target.value)}
-                className="w-6 h-6 rounded cursor-pointer bg-transparent border-0"
-              />
-            </div>
-
-            {/* Épaisseur du trait */}
-            <div className="flex items-center gap-1.5 border-l border-neutral-800 pl-2">
-              <span className="text-neutral-300">Épaisseur :</span>
-              <input
-                type="range"
-                min="1"
-                max="25"
-                step="1"
-                value={drawWidth}
-                onChange={(e) => setDrawWidth(parseInt(e.target.value, 10))}
-                className="w-20 accent-amber-500 cursor-pointer"
-              />
-              <span className="text-[10px] text-neutral-400 w-6 text-right">{drawWidth}px</span>
-            </div>
-
-            {/* Quitter le mode dessin */}
-            <button
-              onClick={() => setIsDrawMode(false)}
-              className="ml-2 bg-neutral-800 hover:bg-neutral-700 text-neutral-200 border border-neutral-700 px-2.5 py-0.5 rounded-full text-xs font-semibold transition"
-            >
-              ✓ Quitter le dessin
-            </button>
-          </div>
-        </div>
-      )}
-
-      {/* Barre d'édition contextuelle lorsqu'une forme est sélectionnée (hors mode dessin) */}
-      {!isDrawMode && selectedShape && (
-        <div className="shrink-0 flex justify-center px-2 py-1 z-40">
-          <div className="flex items-center gap-3 bg-neutral-900/90 border border-amber-500/40 px-3 py-1 rounded-full shadow-lg text-xs">
-            <span className="text-amber-400 font-semibold">Forme sélectionnée :</span>
-
-            {/* Couleur */}
-            <div className="flex items-center gap-1.5">
-              <span className="text-neutral-400">Couleur :</span>
-              <input
-                type="color"
-                value={selectedShape.color}
-                onChange={(e) => updateSelectedShape({ color: e.target.value })}
-                className="w-6 h-6 rounded cursor-pointer bg-transparent border-0"
-              />
-            </div>
-
-            {/* Épaisseur du trait pour les flèches et lignes */}
-            {(selectedShape.type === 'arrow' || selectedShape.type === 'dashed-arrow' || selectedShape.type === 'freehand') && (
-              <div className="flex items-center gap-1.5 border-l border-neutral-800 pl-3">
-                <span className="text-neutral-400">Épaisseur :</span>
-                <input
-                  type="range"
-                  min="1"
-                  max="25"
-                  step="1"
-                  value={selectedShape.strokeWidth ?? 3}
-                  onChange={(e) => updateSelectedShape({ strokeWidth: parseInt(e.target.value, 10) })}
-                  className="w-20 accent-amber-500 cursor-pointer"
-                />
-                <span className="text-[10px] text-neutral-400 w-7 text-right">
-                  {(selectedShape.strokeWidth ?? 3)}px
-                </span>
-              </div>
-            )}
-
-            {/* Transparence pour les zones */}
-            {(selectedShape.type === 'rect' || selectedShape.type === 'circle') && (
-              <div className="flex items-center gap-1.5 border-l border-neutral-800 pl-3">
-                <span className="text-neutral-400">Transparence :</span>
-                <input
-                  type="range"
-                  min="0.05"
-                  max="1"
-                  step="0.05"
-                  value={selectedShape.opacity ?? 0.4}
-                  onChange={(e) => updateSelectedShape({ opacity: parseFloat(e.target.value) })}
-                  className="w-20 accent-amber-500 cursor-pointer"
-                />
-                <span className="text-[10px] text-neutral-400 w-7 text-right">
-                  {Math.round((selectedShape.opacity ?? 0.4) * 100)}%
-                </span>
-              </div>
-            )}
-
-            {/* Texte de l'annotation */}
-            {selectedShape.type === 'text' && (
-              <div className="flex items-center gap-1.5 border-l border-neutral-800 pl-3">
-                <span className="text-neutral-400">Texte :</span>
-                <input
-                  type="text"
-                  value={selectedShape.text || ''}
-                  onChange={(e) => updateSelectedShape({ text: e.target.value })}
-                  className="bg-neutral-800 text-white px-2 py-0.5 rounded border border-neutral-700 text-xs outline-none focus:border-amber-500"
-                />
-              </div>
-            )}
-
-            {/* Bouton de suppression */}
-            <button
-              onClick={deleteSelectedShape}
-              className="ml-2 bg-red-600/20 hover:bg-red-600/40 text-red-400 border border-red-500/30 px-2 py-0.5 rounded text-xs transition"
-            >
-              Supprimer
-            </button>
-          </div>
-        </div>
-      )}
 
       {/* Zone du terrain Canvas */}
-      <div ref={fieldAreaRef} className="flex-1 min-h-0 flex items-center justify-center">
-        {scale > 0 && (
-          <div className="border-2 border-white rounded shadow-2xl overflow-hidden cursor-crosshair">
-            <Stage
-              ref={stageRef}
-              width={DESIGN_WIDTH * scale}
-              height={DESIGN_HEIGHT * scale}
-              scale={{ x: scale, y: scale }}
-              onMouseDown={handleStageMouseDown}
-              onMouseMove={handleStageMouseMove}
-              onMouseUp={handleStageMouseUp}
-              onTouchStart={handleStageMouseDown}
-              onTouchMove={handleStageMouseMove}
-              onTouchEnd={handleStageMouseUp}
-            >
-              <Layer>
-                {/* Terrain de football */}
-                <Rect x={0} y={0} width={DESIGN_WIDTH} height={DESIGN_HEIGHT} fill="#15803d" />
-                <Rect x={10} y={10} width={780} height={480} stroke="#ffffff" strokeWidth={2} />
-                <Rect x={399} y={10} width={2} height={480} fill="#ffffff" />
-                <Circle x={400} y={250} radius={60} stroke="#ffffff" strokeWidth={2} />
-                <Rect x={10} y={130} width={100} height={240} stroke="#ffffff" strokeWidth={2} />
-                <Rect x={690} y={130} width={100} height={240} stroke="#ffffff" strokeWidth={2} />
+      <div ref={fieldAreaRef} className="flex-1 flex items-center justify-center relative p-2 overflow-hidden">
+        <div
+          style={{
+            width: DESIGN_WIDTH * scale,
+            height: DESIGN_HEIGHT * scale,
+          }}
+          className="relative shadow-2xl rounded-lg overflow-hidden border-2 border-neutral-800"
+        >
+          <Stage
+            ref={stageRef}
+            width={DESIGN_WIDTH * scale}
+            height={DESIGN_HEIGHT * scale}
+            scaleX={scale}
+            scaleY={scale}
+            onMouseDown={handleStageMouseDown}
+            onMouseMove={handleStageMouseMove}
+            onMouseUp={handleStageMouseUp}
+            onTouchStart={handleStageMouseDown}
+            onTouchMove={handleStageMouseMove}
+            onTouchEnd={handleStageMouseUp}
+          >
+            {/* Calque terrain de football */}
+            <Layer>
+              {/* Fond pelouse */}
+              <Rect x={0} y={0} width={DESIGN_WIDTH} height={DESIGN_HEIGHT} fill="#15803d" />
 
-                {/* Formes & Dessins */}
-                {shapes.map((shape) => {
-                  const isSelected = shape.id === selectedShapeId;
+              {/* Ligne extérieure */}
+              <Rect
+                x={20}
+                y={20}
+                width={760}
+                height={460}
+                stroke="#ffffff"
+                strokeWidth={3}
+                opacity={0.85}
+              />
 
-                  if (shape.type === 'freehand') {
-                    return (
-                      <Line
-                        key={shape.id}
-                        ref={isSelected ? shapeRef : null}
-                        points={shape.points || []}
-                        stroke={shape.color}
-                        strokeWidth={shape.strokeWidth || 4}
-                        tension={0.5}
-                        lineCap="round"
-                        lineJoin="round"
-                        opacity={shape.opacity ?? 1}
-                        dash={shape.penType === 'dashed' ? [8, 8] : undefined}
-                        draggable={!isDrawMode}
-                        onClick={() => {
-                          if (!isDrawMode) {
-                            setSelectedShapeId(shape.id);
-                            setSelectedPlayerId(null);
-                          }
-                        }}
-                        onTap={() => {
-                          if (!isDrawMode) {
-                            setSelectedShapeId(shape.id);
-                            setSelectedPlayerId(null);
-                          }
-                        }}
-                        onDragEnd={(e) => {
-                          updateSelectedShape({ x: e.target.x(), y: e.target.y() });
-                        }}
-                      />
-                    );
-                  }
+              {/* Ligne médiane */}
+              <Line points={[400, 20, 400, 480]} stroke="#ffffff" strokeWidth={3} opacity={0.85} />
 
-                  if (shape.type === 'arrow' || shape.type === 'dashed-arrow') {
-                    const strokeW = shape.strokeWidth || 3;
-                    const pointerSize = Math.max(8, strokeW * 2.5);
+              {/* Cercle central */}
+              <Circle x={400} y={250} radius={65} stroke="#ffffff" strokeWidth={3} opacity={0.85} />
+              <Circle x={400} y={250} radius={4} fill="#ffffff" opacity={0.85} />
 
-                    return (
-                      <Arrow
-                        key={shape.id}
-                        ref={isSelected ? shapeRef : null}
-                        x={shape.x}
-                        y={shape.y}
-                        points={shape.points || [0, 0, 100, 0]}
-                        pointerLength={pointerSize}
-                        pointerWidth={pointerSize}
-                        fill={shape.color}
-                        stroke={shape.color}
-                        strokeWidth={strokeW}
-                        dash={shape.type === 'dashed-arrow' ? [6, 6] : undefined}
-                        scaleX={shape.scaleX || 1}
-                        scaleY={shape.scaleY || 1}
-                        draggable={!isDrawMode}
-                        onClick={() => {
-                          if (!isDrawMode) {
-                            setSelectedShapeId(shape.id);
-                            setSelectedPlayerId(null);
-                          }
-                        }}
-                        onTap={() => {
-                          if (!isDrawMode) {
-                            setSelectedShapeId(shape.id);
-                            setSelectedPlayerId(null);
-                          }
-                        }}
-                        onDragEnd={(e) => {
-                          updateSelectedShape({ x: e.target.x(), y: e.target.y() });
-                        }}
-                        onTransformEnd={() => {
-                          const node = shapeRef.current;
-                          if (node) {
-                            updateSelectedShape({
-                              x: node.x(),
-                              y: node.y(),
-                              scaleX: node.scaleX(),
-                              scaleY: node.scaleY(),
-                            });
-                          }
-                        }}
-                      />
-                    );
-                  }
+              {/* Surface gauche */}
+              <Rect x={20} y={130} width={120} height={240} stroke="#ffffff" strokeWidth={3} opacity={0.85} />
+              <Rect x={20} y={190} width={45} height={120} stroke="#ffffff" strokeWidth={3} opacity={0.85} />
 
-                  if (shape.type === 'rect') {
-                    return (
-                      <Rect
-                        key={shape.id}
-                        ref={isSelected ? shapeRef : null}
-                        x={shape.x}
-                        y={shape.y}
-                        width={shape.width || 120}
-                        height={shape.height || 70}
-                        fill={shape.color}
-                        opacity={shape.opacity ?? 0.4}
-                        stroke={isSelected ? '#facc15' : shape.color}
-                        strokeWidth={isSelected ? 3 : 2}
-                        dash={[5, 5]}
-                        scaleX={shape.scaleX || 1}
-                        scaleY={shape.scaleY || 1}
-                        draggable={!isDrawMode}
-                        onClick={() => {
-                          if (!isDrawMode) {
-                            setSelectedShapeId(shape.id);
-                            setSelectedPlayerId(null);
-                          }
-                        }}
-                        onTap={() => {
-                          if (!isDrawMode) {
-                            setSelectedShapeId(shape.id);
-                            setSelectedPlayerId(null);
-                          }
-                        }}
-                        onDragEnd={(e) => {
-                          updateSelectedShape({ x: e.target.x(), y: e.target.y() });
-                        }}
-                        onTransformEnd={() => {
-                          const node = shapeRef.current;
-                          if (node) {
-                            updateSelectedShape({
-                              x: node.x(),
-                              y: node.y(),
-                              scaleX: node.scaleX(),
-                              scaleY: node.scaleY(),
-                            });
-                          }
-                        }}
-                      />
-                    );
-                  }
+              {/* Surface droite */}
+              <Rect x={660} y={130} width={120} height={240} stroke="#ffffff" strokeWidth={3} opacity={0.85} />
+              <Rect x={735} y={190} width={45} height={120} stroke="#ffffff" strokeWidth={3} opacity={0.85} />
+            </Layer>
 
-                  if (shape.type === 'circle') {
-                    return (
-                      <Circle
-                        key={shape.id}
-                        ref={isSelected ? shapeRef : null}
-                        x={shape.x}
-                        y={shape.y}
-                        radius={shape.radius || 40}
-                        fill={shape.color}
-                        opacity={shape.opacity ?? 0.4}
-                        stroke={isSelected ? '#facc15' : shape.color}
-                        strokeWidth={isSelected ? 3 : 2}
-                        dash={[5, 5]}
-                        scaleX={shape.scaleX || 1}
-                        scaleY={shape.scaleY || 1}
-                        draggable={!isDrawMode}
-                        onClick={() => {
-                          if (!isDrawMode) {
-                            setSelectedShapeId(shape.id);
-                            setSelectedPlayerId(null);
-                          }
-                        }}
-                        onTap={() => {
-                          if (!isDrawMode) {
-                            setSelectedShapeId(shape.id);
-                            setSelectedPlayerId(null);
-                          }
-                        }}
-                        onDragEnd={(e) => {
-                          updateSelectedShape({ x: e.target.x(), y: e.target.y() });
-                        }}
-                        onTransformEnd={() => {
-                          const node = shapeRef.current;
-                          if (node) {
-                            updateSelectedShape({
-                              x: node.x(),
-                              y: node.y(),
-                              scaleX: node.scaleX(),
-                              scaleY: node.scaleY(),
-                            });
-                          }
-                        }}
-                      />
-                    );
-                  }
+            {/* Calque des formes & dessins */}
+            <Layer>
+              {shapes.map((s) => {
+                const isSelected = s.id === selectedShapeId;
 
-                  if (shape.type === 'text') {
-                    return (
-                      <Text
-                        key={shape.id}
-                        ref={isSelected ? shapeRef : null}
-                        x={shape.x}
-                        y={shape.y}
-                        text={shape.text || 'Annotation'}
-                        fontSize={14}
-                        fill={shape.color}
-                        fontStyle="bold"
-                        scaleX={shape.scaleX || 1}
-                        scaleY={shape.scaleY || 1}
-                        draggable={!isDrawMode}
-                        onClick={() => {
-                          if (!isDrawMode) {
-                            setSelectedShapeId(shape.id);
-                            setSelectedPlayerId(null);
-                          }
-                        }}
-                        onTap={() => {
-                          if (!isDrawMode) {
-                            setSelectedShapeId(shape.id);
-                            setSelectedPlayerId(null);
-                          }
-                        }}
-                        onDragEnd={(e) => {
-                          updateSelectedShape({ x: e.target.x(), y: e.target.y() });
-                        }}
-                        onTransformEnd={() => {
-                          const node = shapeRef.current;
-                          if (node) {
-                            updateSelectedShape({
-                              x: node.x(),
-                              y: node.y(),
-                              scaleX: node.scaleX(),
-                              scaleY: node.scaleY(),
-                            });
-                          }
-                        }}
-                      />
-                    );
-                  }
-
-                  return null;
-                })}
-
-                {/* Transformer de Konva */}
-                {!isDrawMode && selectedShapeId && (
-                  <Transformer
-                    ref={trRef}
-                    boundBoxFunc={(oldBox, newBox) => {
-                      if (newBox.width < 10 || newBox.height < 10) {
-                        return oldBox;
-                      }
-                      return newBox;
-                    }}
-                  />
-                )}
-
-                {/* Joueurs */}
-                {players.map((player) => {
-                  const isSelected = player.id === selectedPlayerId;
+                if (s.type === 'arrow' || s.type === 'dashed-arrow') {
                   return (
-                    <Group
-                      key={player.id}
-                      x={player.x}
-                      y={player.y}
+                    <Arrow
+                      key={s.id}
+                      ref={isSelected ? shapeRef : null}
+                      x={s.x}
+                      y={s.y}
+                      points={s.points || [0, 0, 100, 0]}
+                      stroke={s.color}
+                      fill={s.color}
+                      strokeWidth={s.strokeWidth || 3}
+                      dash={s.type === 'dashed-arrow' ? [8, 8] : undefined}
                       draggable={!isDrawMode}
-                      onDragStart={(e) => handleDragStart(e, player.id)}
-                      onDragEnd={(e) => handleDragEnd(e, player.id)}
-                      onClick={() => {
-                        if (!isDrawMode) {
-                          setSelectedPlayerId(player.id);
-                          setSelectedShapeId(null);
-                        }
-                      }}
-                      onTap={() => {
-                        if (!isDrawMode) {
-                          setSelectedPlayerId(player.id);
-                          setSelectedShapeId(null);
-                        }
-                      }}
-                    >
-                      <Circle
-                        radius={16}
-                        fill={player.color}
-                        stroke={isSelected ? '#facc15' : '#ffffff'}
-                        strokeWidth={isSelected ? 3 : 2}
-                        shadowBlur={isSelected ? 10 : 2}
-                        shadowColor="black"
-                      />
-                      <Text
-                        text={player.number}
-                        fontSize={12}
-                        fontStyle="bold"
-                        fill="#ffffff"
-                        align="center"
-                        verticalAlign="middle"
-                        offsetX={player.number.length > 1 ? 7 : 4}
-                        offsetY={5}
-                      />
-                      <Text
-                        text={player.name}
-                        fontSize={10}
-                        fill="#ffffff"
-                        align="center"
-                        y={20}
-                        offsetX={player.name.length * 2.5}
-                      />
-                    </Group>
+                      onClick={() => { setSelectedShapeId(s.id); setSelectedPlayerId(null); }}
+                      onTap={() => { setSelectedShapeId(s.id); setSelectedPlayerId(null); }}
+                      onContextMenu={(e) => handleItemContextMenu(e, s.id, 'shape')}
+                      onTouchStart={(e) => handleItemTouchStart(e, s.id, 'shape')}
+                      onTouchMove={clearLongPress}
+                      onTouchEnd={clearLongPress}
+                    />
                   );
-                })}
-              </Layer>
-            </Stage>
-          </div>
-        )}
+                }
+
+                if (s.type === 'rect') {
+                  return (
+                    <Rect
+                      key={s.id}
+                      ref={isSelected ? shapeRef : null}
+                      x={s.x}
+                      y={s.y}
+                      width={s.width || 120}
+                      height={s.height || 70}
+                      fill={s.color}
+                      opacity={s.opacity || 0.4}
+                      stroke={s.color}
+                      strokeWidth={2}
+                      draggable={!isDrawMode}
+                      onClick={() => { setSelectedShapeId(s.id); setSelectedPlayerId(null); }}
+                      onTap={() => { setSelectedShapeId(s.id); setSelectedPlayerId(null); }}
+                      onContextMenu={(e) => handleItemContextMenu(e, s.id, 'shape')}
+                      onTouchStart={(e) => handleItemTouchStart(e, s.id, 'shape')}
+                      onTouchMove={clearLongPress}
+                      onTouchEnd={clearLongPress}
+                    />
+                  );
+                }
+
+                if (s.type === 'circle') {
+                  return (
+                    <Circle
+                      key={s.id}
+                      ref={isSelected ? shapeRef : null}
+                      x={s.x}
+                      y={s.y}
+                      radius={s.radius || 40}
+                      fill={s.color}
+                      opacity={s.opacity || 0.4}
+                      stroke={s.color}
+                      strokeWidth={2}
+                      draggable={!isDrawMode}
+                      onClick={() => { setSelectedShapeId(s.id); setSelectedPlayerId(null); }}
+                      onTap={() => { setSelectedShapeId(s.id); setSelectedPlayerId(null); }}
+                      onContextMenu={(e) => handleItemContextMenu(e, s.id, 'shape')}
+                      onTouchStart={(e) => handleItemTouchStart(e, s.id, 'shape')}
+                      onTouchMove={clearLongPress}
+                      onTouchEnd={clearLongPress}
+                    />
+                  );
+                }
+
+                if (s.type === 'text') {
+                  return (
+                    <Text
+                      key={s.id}
+                      ref={isSelected ? shapeRef : null}
+                      x={s.x}
+                      y={s.y}
+                      text={s.text || 'Texte'}
+                      fontSize={16}
+                      fontStyle="bold"
+                      fill={s.color || '#f59e0b'}
+                      draggable={!isDrawMode}
+                      onClick={() => { setSelectedShapeId(s.id); setSelectedPlayerId(null); }}
+                      onTap={() => { setSelectedShapeId(s.id); setSelectedPlayerId(null); }}
+                      onContextMenu={(e) => handleItemContextMenu(e, s.id, 'shape')}
+                      onTouchStart={(e) => handleItemTouchStart(e, s.id, 'shape')}
+                      onTouchMove={clearLongPress}
+                      onTouchEnd={clearLongPress}
+                    />
+                  );
+                }
+
+                if (s.type === 'freehand') {
+                  return (
+                    <Line
+                      key={s.id}
+                      points={s.points || []}
+                      stroke={s.color}
+                      strokeWidth={s.strokeWidth || 4}
+                      opacity={s.opacity || 1}
+                      dash={s.penType === 'dashed' ? [10, 10] : undefined}
+                      lineCap="round"
+                      lineJoin="round"
+                    />
+                  );
+                }
+
+                return null;
+              })}
+
+              {/* Transformateur de redimensionnement de forme */}
+              {selectedShapeId && <Transformer ref={trRef} rotateEnabled={true} />}
+            </Layer>
+
+            {/* Calque des Joueurs */}
+            <Layer>
+              {players.map((p) => {
+                const isSelected = p.id === selectedPlayerId;
+
+                return (
+                  <Group
+                    key={p.id}
+                    x={p.x}
+                    y={p.y}
+                    draggable={!isDrawMode}
+                    onDragStart={(e) => handleDragStart(e, p.id)}
+                    onDragEnd={(e) => handleDragEnd(e, p.id)}
+                    onClick={() => { setSelectedPlayerId(p.id); setSelectedShapeId(null); }}
+                    onTap={() => { setSelectedPlayerId(p.id); setSelectedShapeId(null); }}
+                    onContextMenu={(e) => handleItemContextMenu(e, p.id, 'player')}
+                    onTouchStart={(e) => handleItemTouchStart(e, p.id, 'player')}
+                    onTouchMove={clearLongPress}
+                    onTouchEnd={clearLongPress}
+                  >
+                    {/* Cercle du joueur */}
+                    <Circle
+                      radius={18}
+                      fill={p.color}
+                      stroke={isSelected ? '#ffffff' : '#000000'}
+                      strokeWidth={isSelected ? 3 : 1}
+                      shadowBlur={isSelected ? 10 : 2}
+                      shadowColor="#000000"
+                    />
+
+                    {/* Numéro */}
+                    <Text
+                      text={p.number}
+                      fontSize={13}
+                      fontStyle="bold"
+                      fill="#ffffff"
+                      align="center"
+                      verticalAlign="middle"
+                      offsetX={6}
+                      offsetY={6}
+                    />
+
+                    {/* Nom du joueur */}
+                    {p.name && (
+                      <Text
+                        text={p.name}
+                        fontSize={11}
+                        fill="#ffffff"
+                        align="center"
+                        y={22}
+                        offsetX={30}
+                        width={60}
+                      />
+                    )}
+                  </Group>
+                );
+              })}
+            </Layer>
+          </Stage>
+        </div>
       </div>
 
+      {/* Menu Contextuel Pop-up (Clic droit / Maintien Mobile) */}
+      {contextMenu.visible && contextMenu.targetId && (
+        <div
+          style={{
+            position: 'fixed',
+            top: contextMenu.y,
+            left: contextMenu.x,
+            backgroundColor: '#171717',
+            border: '1px solid #404040',
+            boxShadow: '0px 10px 25px rgba(0,0,0,0.5)',
+            borderRadius: '8px',
+            zIndex: 100,
+            overflow: 'hidden',
+          }}
+        >
+          <button
+            onClick={() => modifyTarget(contextMenu.targetId!, contextMenu.targetType!)}
+            className="w-full text-left px-4 py-2 text-xs font-semibold text-neutral-200 hover:bg-neutral-800 transition flex items-center gap-2"
+          >
+            ✏️ Modifier
+          </button>
+          <button
+            onClick={() => deleteTarget(contextMenu.targetId!, contextMenu.targetType!)}
+            className="w-full text-left px-4 py-2 text-xs font-semibold text-red-400 hover:bg-neutral-800 transition flex items-center gap-2 border-t border-neutral-800"
+          >
+            🗑 Supprimer (Suppr)
+          </button>
+        </div>
+      )}
     </div>
   );
 }
