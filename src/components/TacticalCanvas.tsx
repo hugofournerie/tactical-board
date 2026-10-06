@@ -1,6 +1,6 @@
 'use client';
 // @ts-nocheck
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import { Stage, Layer, Rect, Circle, Text, Group } from 'react-konva';
 
 interface Player {
@@ -13,6 +13,8 @@ interface Player {
 }
 
 const MIN_DISTANCE = 44;
+const DESIGN_WIDTH = 800;
+const DESIGN_HEIGHT = 500;
 
 const DEFAULT_FORMATIONS = [
   { key: '4-3-3', team: 'PSG' },
@@ -231,6 +233,22 @@ const FORMATIONS_RED: Record<string, { x: number; y: number; number: string; nam
 );
 
 export default function TacticalCanvas() {
+  const containerRef = useRef<HTMLDivElement>(null);
+  const [containerWidth, setContainerWidth] = useState<number>(DESIGN_WIDTH);
+
+  useEffect(() => {
+    const updateWidth = () => {
+      if (containerRef.current) {
+        setContainerWidth(containerRef.current.offsetWidth);
+      }
+    };
+    updateWidth();
+    window.addEventListener('resize', updateWidth);
+    return () => window.removeEventListener('resize', updateWidth);
+  }, []);
+
+  const scale = containerWidth / DESIGN_WIDTH;
+
   const [selectedBlueFormation, setSelectedBlueFormation] = useState<string>('4-3-3');
   const [selectedRedFormation, setSelectedRedFormation] = useState<string>('4-3-3');
 
@@ -277,24 +295,20 @@ export default function TacticalCanvas() {
   const [selectedPlayerId, setSelectedPlayerId] = useState<string | null>(null);
   const selectedPlayer = players.find((p) => p.id === selectedPlayerId);
 
-  // Gestion des actions depuis le menu déroulant (Supprimer ou Mettre à jour)
   const handleSelectAction = (team: 'blue' | 'red', value: string) => {
     const isBlue = team === 'blue';
     const currentTacticName = isBlue ? selectedBlueFormation : selectedRedFormation;
 
-    // Action 1 : L'utilisateur veut SUPPRIMER la tactique
     if (value === 'action:delete') {
       setTactiqueToDelete(currentTacticName);
       return; 
     }
 
-    // Action 2 : L'utilisateur veut METTRE À JOUR la tactique existante
     if (value === 'action:update') {
       const prefix = isBlue ? 'b-' : 'r-';
       const teamLayout = players
         .filter((p) => p.id.startsWith(prefix))
         .map((p) => ({
-          // On normalise les positions pour qu'elles s'enregistrent toujours côté gauche en référence
           x: isBlue ? p.x : 800 - p.x,
           y: p.y,
           number: p.number,
@@ -309,13 +323,11 @@ export default function TacticalCanvas() {
       setCustomFormations(updatedCustoms);
       localStorage.setItem('custom_tactical_formations', JSON.stringify(updatedCustoms));
       
-      // Afficher la notification de succès temporaire
       setToastMessage(`Dispositif "${currentTacticName}" mis à jour avec succès !`);
       setTimeout(() => setToastMessage(null), 3000);
       return;
     }
 
-    // Sinon, c'est un changement de formation normal
     applyFormation(team, value);
   };
 
@@ -427,14 +439,12 @@ export default function TacticalCanvas() {
   return (
     <div className="flex flex-col items-center gap-4 w-full max-w-4xl relative">
       
-      {/* Toast de notification */}
       {toastMessage && (
         <div className="fixed top-6 left-1/2 -translate-x-1/2 bg-emerald-600 text-white px-5 py-2.5 rounded-full shadow-lg z-50 text-sm font-semibold animate-bounce">
           {toastMessage}
         </div>
       )}
 
-      {/* Fenêtre modale de confirmation de suppression */}
       {tactiqueToDelete && (
         <div className="fixed inset-0 bg-black/70 flex items-center justify-center z-50 p-4">
           <div className="bg-neutral-900 border border-neutral-700 p-5 rounded-lg shadow-xl max-w-sm w-full text-center flex flex-col gap-4">
@@ -460,10 +470,8 @@ export default function TacticalCanvas() {
         </div>
       )}
 
-      {/* Barre supérieure */}
       <div className="flex flex-wrap items-center justify-between gap-4 w-full bg-neutral-900 p-3 rounded-lg border border-neutral-800">
         
-        {/* Équipe Bleue */}
         <div className="flex items-center gap-2">
           <label htmlFor="blue-formation-select" className="text-xs font-semibold text-blue-400">
             Bleus :
@@ -486,7 +494,6 @@ export default function TacticalCanvas() {
                 ))}
               </optgroup>
             )}
-            {/* Actions invisibles tant qu'une compo personnalisée n'est pas sélectionnée */}
             {customFormations[selectedBlueFormation] && (
               <optgroup label="⚙️ Gérer cette tactique">
                 <option value="action:update">💾 Enregistrer les modifications</option>
@@ -496,7 +503,6 @@ export default function TacticalCanvas() {
           </select>
         </div>
 
-        {/* CENTRE : Création de tactique */}
         <div className="flex items-center justify-center">
           {!isCreating ? (
             <button
@@ -525,7 +531,6 @@ export default function TacticalCanvas() {
           )}
         </div>
 
-        {/* Équipe Rouge */}
         <div className="flex items-center gap-2">
           <label htmlFor="red-formation-select" className="text-xs font-semibold text-red-400">
             Rouges :
@@ -548,7 +553,6 @@ export default function TacticalCanvas() {
                 ))}
               </optgroup>
             )}
-            {/* Actions invisibles tant qu'une compo personnalisée n'est pas sélectionnée */}
             {customFormations[selectedRedFormation] && (
               <optgroup label="⚙️ Gérer cette tactique">
                 <option value="action:update">💾 Enregistrer les modifications</option>
@@ -560,11 +564,15 @@ export default function TacticalCanvas() {
 
       </div>
 
-      {/* Terrain Konva */}
-      <div className="relative">
-        <Stage width={800} height={500} className="border-4 border-white rounded-lg shadow-2xl bg-green-700">
+      {/* Terrain Konva Responsive */}
+      <div ref={containerRef} className="w-full relative border-4 border-white rounded-lg shadow-2xl bg-green-700 overflow-hidden">
+        <Stage
+          width={containerWidth}
+          height={DESIGN_HEIGHT * scale}
+          scale={{ x: scale, y: scale }}
+        >
           <Layer>
-            <Rect x={0} y={0} width={800} height={500} fill="#15803d" />
+            <Rect x={0} y={0} width={DESIGN_WIDTH} height={DESIGN_HEIGHT} fill="#15803d" />
             <Rect x={10} y={10} width={780} height={480} stroke="#ffffff" strokeWidth={2} />
             <Rect x={399} y={10} width={2} height={480} fill="#ffffff" />
             <Circle x={400} y={250} radius={60} stroke="#ffffff" strokeWidth={2} />
@@ -602,7 +610,6 @@ export default function TacticalCanvas() {
         </Stage>
       </div>
 
-      {/* Édition du joueur sélectionné */}
       {selectedPlayer && (
         <div className="flex items-center justify-between gap-4 bg-neutral-900 border border-neutral-800 p-3 rounded-lg w-full">
           <div className="flex items-center gap-2">
