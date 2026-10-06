@@ -1,7 +1,7 @@
 'use client';
 // @ts-nocheck
 import React, { useState, useEffect, useRef } from 'react';
-import { Stage, Layer, Rect, Circle, Text, Group, Arrow, Transformer } from 'react-konva';
+import { Stage, Layer, Rect, Circle, Text, Group, Arrow, Line, Transformer } from 'react-konva';
 
 interface Player {
   id: string;
@@ -14,7 +14,7 @@ interface Player {
 
 interface CustomShape {
   id: string;
-  type: 'arrow' | 'dashed-arrow' | 'rect' | 'circle' | 'text';
+  type: 'arrow' | 'dashed-arrow' | 'rect' | 'circle' | 'text' | 'freehand';
   x: number;
   y: number;
   width?: number;
@@ -27,6 +27,7 @@ interface CustomShape {
   text?: string;
   scaleX?: number;
   scaleY?: number;
+  penType?: 'pen' | 'highlighter' | 'dashed';
 }
 
 const MIN_DISTANCE = 44;
@@ -253,6 +254,7 @@ const FORMATIONS_RED: Record<string, { x: number; y: number; number: string; nam
 export default function TacticalCanvas() {
   const [scale, setScale] = useState<number>(0);
   const fieldAreaRef = useRef<HTMLDivElement>(null);
+  const stageRef = useRef<any>(null);
   const shapeRef = useRef<any>(null);
   const trRef = useRef<any>(null);
 
@@ -287,6 +289,13 @@ export default function TacticalCanvas() {
   const [shapes, setShapes] = useState<CustomShape[]>([]);
   const [selectedShapeId, setSelectedShapeId] = useState<string | null>(null);
   const [isShapeMenuOpen, setIsShapeMenuOpen] = useState<boolean>(false);
+
+  // État du mode dessin à la main
+  const [isDrawMode, setIsDrawMode] = useState<boolean>(false);
+  const [penType, setPenType] = useState<'pen' | 'highlighter' | 'dashed'>('pen');
+  const [drawColor, setDrawColor] = useState<string>('#f59e0b');
+  const [drawWidth, setDrawWidth] = useState<number>(4);
+  const isDrawingRef = useRef<boolean>(false);
 
   useEffect(() => {
     if (selectedShapeId && trRef.current && shapeRef.current) {
@@ -332,7 +341,26 @@ export default function TacticalCanvas() {
 
   const selectedShape = shapes.find((s) => s.id === selectedShapeId);
 
+  // Export d'image (terrain + formes + joueurs uniquement)
+  const handleExportImage = () => {
+    if (!stageRef.current) return;
+    setSelectedShapeId(null);
+    setSelectedPlayerId(null);
+
+    setTimeout(() => {
+      const dataURL = stageRef.current.toDataURL({ pixelRatio: 3 });
+      const link = document.createElement('a');
+      link.download = `tactique-terrain-${Date.now()}.png`;
+      link.href = dataURL;
+      document.body.appendChild(link);
+      link.click();
+      document.body.removeChild(link);
+    }, 50);
+  };
+
+  // Ajout de formes prédéfinies
   const addShape = (type: CustomShape['type']) => {
+    setIsDrawMode(false);
     const id = `shape-${Date.now()}`;
     const newShape: CustomShape = {
       id,
@@ -354,6 +382,66 @@ export default function TacticalCanvas() {
     setSelectedShapeId(id);
     setSelectedPlayerId(null);
     setIsShapeMenuOpen(false);
+  };
+
+  // Événements de dessin libre à la souris
+  const handleStageMouseDown = (e: any) => {
+    if (!isDrawMode) {
+      if (e.target === e.target.getStage()) {
+        setSelectedShapeId(null);
+        setSelectedPlayerId(null);
+      }
+      return;
+    }
+
+    isDrawingRef.current = true;
+    const stage = stageRef.current;
+    if (!stage) return;
+
+    const pos = stage.getPointerPosition();
+    const pointX = pos.x / scale;
+    const pointY = pos.y / scale;
+
+    const newShape: CustomShape = {
+      id: `draw-${Date.now()}`,
+      type: 'freehand',
+      x: 0,
+      y: 0,
+      points: [pointX, pointY],
+      color: drawColor,
+      strokeWidth: penType === 'highlighter' ? Math.max(drawWidth, 14) : drawWidth,
+      opacity: penType === 'highlighter' ? 0.35 : 1,
+      penType: penType,
+    };
+
+    setShapes((prev) => [...prev, newShape]);
+    setSelectedShapeId(null);
+    setSelectedPlayerId(null);
+  };
+
+  const handleStageMouseMove = () => {
+    if (!isDrawMode || !isDrawingRef.current) return;
+
+    const stage = stageRef.current;
+    if (!stage) return;
+
+    const pos = stage.getPointerPosition();
+    const pointX = pos.x / scale;
+    const pointY = pos.y / scale;
+
+    setShapes((prev) => {
+      if (prev.length === 0) return prev;
+      const lastShape = prev[prev.length - 1];
+      if (lastShape.type !== 'freehand') return prev;
+
+      const newPoints = [...(lastShape.points || []), pointX, pointY];
+      const updatedShape = { ...lastShape, points: newPoints };
+      return [...prev.slice(0, -1), updatedShape];
+    });
+  };
+
+  const handleStageMouseUp = () => {
+    isDrawingRef.current = false;
   };
 
   const updateSelectedShape = (fields: Partial<CustomShape>) => {
@@ -448,12 +536,14 @@ export default function TacticalCanvas() {
   };
 
   const handleDragStart = (e: any, id: string) => {
+    if (isDrawMode) return;
     setSelectedPlayerId(id);
     setSelectedShapeId(null);
     e.target.moveToTop();
   };
 
   const handleDragEnd = (e: any, id: string) => {
+    if (isDrawMode) return;
     let targetX = e.target.x();
     let targetY = e.target.y();
 
@@ -542,18 +632,43 @@ export default function TacticalCanvas() {
       <div className="shrink-0 flex justify-center px-2 pt-2 pb-1 z-50">
         <div className="flex flex-wrap items-center justify-center gap-3 bg-neutral-900/90 backdrop-blur-md px-4 py-1.5 rounded-full border border-neutral-800 shadow-lg relative">
 
-          {/* Menu Formes */}
+          {/* Menu Formes & Dessin */}
           <div className="relative">
             <button
               onClick={() => setIsShapeMenuOpen(!isShapeMenuOpen)}
-              className="bg-neutral-800 hover:bg-neutral-700 text-amber-400 border border-neutral-700 px-2.5 py-1 rounded-full text-xs font-semibold flex items-center gap-1.5 transition active:scale-95"
+              className={`border px-2.5 py-1 rounded-full text-xs font-semibold flex items-center gap-1.5 transition active:scale-95 ${
+                isDrawMode
+                  ? 'bg-amber-500 text-neutral-950 border-amber-400 shadow-md shadow-amber-500/20'
+                  : 'bg-neutral-800 hover:bg-neutral-700 text-amber-400 border-neutral-700'
+              }`}
             >
-              <span>🔷 Formes</span>
+              <span>{isDrawMode ? '✍️ Dessin en cours' : '🔷 Formes & Dessin'}</span>
               <span className="text-[10px] text-neutral-400">▼</span>
             </button>
 
             {isShapeMenuOpen && (
-              <div className="absolute left-0 top-full mt-2 w-48 bg-neutral-900 border border-neutral-700 rounded-lg shadow-2xl overflow-hidden text-xs py-1 z-50">
+              <div className="absolute left-0 top-full mt-2 w-52 bg-neutral-900 border border-neutral-700 rounded-lg shadow-2xl overflow-hidden text-xs py-1 z-50">
+                
+                {/* Onglet / Option Dessin Libre */}
+                <div className="px-3 py-1 text-[10px] font-bold text-amber-400 uppercase tracking-wider">
+                  ✏️ Dessin à la main
+                </div>
+                <button
+                  onClick={() => {
+                    setIsDrawMode(true);
+                    setSelectedShapeId(null);
+                    setSelectedPlayerId(null);
+                    setIsShapeMenuOpen(false);
+                  }}
+                  className={`w-full text-left px-3 py-1.5 flex items-center gap-2 transition ${
+                    isDrawMode ? 'bg-amber-500/20 text-amber-300 font-semibold' : 'hover:bg-neutral-800 text-neutral-200'
+                  }`}
+                >
+                  <span>✏️</span> Activer le dessin libre
+                </button>
+
+                <div className="border-t border-neutral-800 my-1" />
+
                 <div className="px-3 py-1 text-[10px] font-bold text-neutral-400 uppercase tracking-wider">
                   Lignes & Flèches
                 </div>
@@ -692,11 +807,95 @@ export default function TacticalCanvas() {
             </select>
           </div>
 
+          <div className="h-4 w-px bg-neutral-800 my-auto" />
+
+          {/* Bouton d'Exportation d'Image */}
+          <button
+            onClick={handleExportImage}
+            className="bg-sky-600 hover:bg-sky-500 text-white px-3 py-1 rounded-full text-xs font-semibold flex items-center gap-1.5 transition shadow"
+            title="Enregistrer une capture du terrain au format image PNG"
+          >
+            <span>📸</span> Enregistrer l'image
+          </button>
+
         </div>
       </div>
 
-      {/* Barre d'édition contextuelle lorsqu'une forme est sélectionnée */}
-      {selectedShape && (
+      {/* Barre d'outils de dessin libre (lorsque le mode dessin est actif) */}
+      {isDrawMode && (
+        <div className="shrink-0 flex justify-center px-2 py-1 z-40">
+          <div className="flex flex-wrap items-center gap-3 bg-amber-950/80 border border-amber-500/50 px-4 py-1.5 rounded-full shadow-lg text-xs">
+            <span className="text-amber-400 font-bold flex items-center gap-1">
+              ✏️ Options de dessin :
+            </span>
+
+            {/* Type de stylo */}
+            <div className="flex items-center gap-1 bg-neutral-900/60 p-0.5 rounded-lg border border-neutral-800">
+              <button
+                onClick={() => setPenType('pen')}
+                className={`px-2 py-0.5 rounded text-[11px] font-medium transition ${
+                  penType === 'pen' ? 'bg-amber-500 text-neutral-950 font-bold' : 'text-neutral-300 hover:text-white'
+                }`}
+              >
+                Stylo
+              </button>
+              <button
+                onClick={() => setPenType('highlighter')}
+                className={`px-2 py-0.5 rounded text-[11px] font-medium transition ${
+                  penType === 'highlighter' ? 'bg-amber-500 text-neutral-950 font-bold' : 'text-neutral-300 hover:text-white'
+                }`}
+              >
+                Surligneur
+              </button>
+              <button
+                onClick={() => setPenType('dashed')}
+                className={`px-2 py-0.5 rounded text-[11px] font-medium transition ${
+                  penType === 'dashed' ? 'bg-amber-500 text-neutral-950 font-bold' : 'text-neutral-300 hover:text-white'
+                }`}
+              >
+                Pointillé
+              </button>
+            </div>
+
+            {/* Couleur */}
+            <div className="flex items-center gap-1.5 border-l border-neutral-800 pl-2">
+              <span className="text-neutral-300">Couleur :</span>
+              <input
+                type="color"
+                value={drawColor}
+                onChange={(e) => setDrawColor(e.target.value)}
+                className="w-6 h-6 rounded cursor-pointer bg-transparent border-0"
+              />
+            </div>
+
+            {/* Épaisseur du trait */}
+            <div className="flex items-center gap-1.5 border-l border-neutral-800 pl-2">
+              <span className="text-neutral-300">Épaisseur :</span>
+              <input
+                type="range"
+                min="1"
+                max="25"
+                step="1"
+                value={drawWidth}
+                onChange={(e) => setDrawWidth(parseInt(e.target.value, 10))}
+                className="w-20 accent-amber-500 cursor-pointer"
+              />
+              <span className="text-[10px] text-neutral-400 w-6 text-right">{drawWidth}px</span>
+            </div>
+
+            {/* Quitter le mode dessin */}
+            <button
+              onClick={() => setIsDrawMode(false)}
+              className="ml-2 bg-neutral-800 hover:bg-neutral-700 text-neutral-200 border border-neutral-700 px-2.5 py-0.5 rounded-full text-xs font-semibold transition"
+            >
+              ✓ Quitter le dessin
+            </button>
+          </div>
+        </div>
+      )}
+
+      {/* Barre d'édition contextuelle lorsqu'une forme est sélectionnée (hors mode dessin) */}
+      {!isDrawMode && selectedShape && (
         <div className="shrink-0 flex justify-center px-2 py-1 z-40">
           <div className="flex items-center gap-3 bg-neutral-900/90 border border-amber-500/40 px-3 py-1 rounded-full shadow-lg text-xs">
             <span className="text-amber-400 font-semibold">Forme sélectionnée :</span>
@@ -712,14 +911,14 @@ export default function TacticalCanvas() {
               />
             </div>
 
-            {/* Épaisseur du trait pour les flèches */}
-            {(selectedShape.type === 'arrow' || selectedShape.type === 'dashed-arrow') && (
+            {/* Épaisseur du trait pour les flèches et lignes */}
+            {(selectedShape.type === 'arrow' || selectedShape.type === 'dashed-arrow' || selectedShape.type === 'freehand') && (
               <div className="flex items-center gap-1.5 border-l border-neutral-800 pl-3">
                 <span className="text-neutral-400">Épaisseur :</span>
                 <input
                   type="range"
                   min="1"
-                  max="15"
+                  max="25"
                   step="1"
                   value={selectedShape.strokeWidth ?? 3}
                   onChange={(e) => updateSelectedShape({ strokeWidth: parseInt(e.target.value, 10) })}
@@ -731,7 +930,7 @@ export default function TacticalCanvas() {
               </div>
             )}
 
-            {/* Transparence pour les zones (Rect/Circle) */}
+            {/* Transparence pour les zones */}
             {(selectedShape.type === 'rect' || selectedShape.type === 'circle') && (
               <div className="flex items-center gap-1.5 border-l border-neutral-800 pl-3">
                 <span className="text-neutral-400">Transparence :</span>
@@ -774,20 +973,21 @@ export default function TacticalCanvas() {
         </div>
       )}
 
-      {/* Zone du terrain */}
+      {/* Zone du terrain Canvas */}
       <div ref={fieldAreaRef} className="flex-1 min-h-0 flex items-center justify-center">
         {scale > 0 && (
-          <div className="border-2 border-white rounded shadow-2xl overflow-hidden">
+          <div className="border-2 border-white rounded shadow-2xl overflow-hidden cursor-crosshair">
             <Stage
+              ref={stageRef}
               width={DESIGN_WIDTH * scale}
               height={DESIGN_HEIGHT * scale}
               scale={{ x: scale, y: scale }}
-              onMouseDown={(e) => {
-                if (e.target === e.target.getStage()) {
-                  setSelectedShapeId(null);
-                  setSelectedPlayerId(null);
-                }
-              }}
+              onMouseDown={handleStageMouseDown}
+              onMouseMove={handleStageMouseMove}
+              onMouseUp={handleStageMouseUp}
+              onTouchStart={handleStageMouseDown}
+              onTouchMove={handleStageMouseMove}
+              onTouchEnd={handleStageMouseUp}
             >
               <Layer>
                 {/* Terrain de football */}
@@ -798,9 +998,42 @@ export default function TacticalCanvas() {
                 <Rect x={10} y={130} width={100} height={240} stroke="#ffffff" strokeWidth={2} />
                 <Rect x={690} y={130} width={100} height={240} stroke="#ffffff" strokeWidth={2} />
 
-                {/* Formes dessinées */}
+                {/* Formes & Dessins */}
                 {shapes.map((shape) => {
                   const isSelected = shape.id === selectedShapeId;
+
+                  if (shape.type === 'freehand') {
+                    return (
+                      <Line
+                        key={shape.id}
+                        ref={isSelected ? shapeRef : null}
+                        points={shape.points || []}
+                        stroke={shape.color}
+                        strokeWidth={shape.strokeWidth || 4}
+                        tension={0.5}
+                        lineCap="round"
+                        lineJoin="round"
+                        opacity={shape.opacity ?? 1}
+                        dash={shape.penType === 'dashed' ? [8, 8] : undefined}
+                        draggable={!isDrawMode}
+                        onClick={() => {
+                          if (!isDrawMode) {
+                            setSelectedShapeId(shape.id);
+                            setSelectedPlayerId(null);
+                          }
+                        }}
+                        onTap={() => {
+                          if (!isDrawMode) {
+                            setSelectedShapeId(shape.id);
+                            setSelectedPlayerId(null);
+                          }
+                        }}
+                        onDragEnd={(e) => {
+                          updateSelectedShape({ x: e.target.x(), y: e.target.y() });
+                        }}
+                      />
+                    );
+                  }
 
                   if (shape.type === 'arrow' || shape.type === 'dashed-arrow') {
                     const strokeW = shape.strokeWidth || 3;
@@ -821,14 +1054,18 @@ export default function TacticalCanvas() {
                         dash={shape.type === 'dashed-arrow' ? [6, 6] : undefined}
                         scaleX={shape.scaleX || 1}
                         scaleY={shape.scaleY || 1}
-                        draggable
+                        draggable={!isDrawMode}
                         onClick={() => {
-                          setSelectedShapeId(shape.id);
-                          setSelectedPlayerId(null);
+                          if (!isDrawMode) {
+                            setSelectedShapeId(shape.id);
+                            setSelectedPlayerId(null);
+                          }
                         }}
                         onTap={() => {
-                          setSelectedShapeId(shape.id);
-                          setSelectedPlayerId(null);
+                          if (!isDrawMode) {
+                            setSelectedShapeId(shape.id);
+                            setSelectedPlayerId(null);
+                          }
                         }}
                         onDragEnd={(e) => {
                           updateSelectedShape({ x: e.target.x(), y: e.target.y() });
@@ -864,14 +1101,18 @@ export default function TacticalCanvas() {
                         dash={[5, 5]}
                         scaleX={shape.scaleX || 1}
                         scaleY={shape.scaleY || 1}
-                        draggable
+                        draggable={!isDrawMode}
                         onClick={() => {
-                          setSelectedShapeId(shape.id);
-                          setSelectedPlayerId(null);
+                          if (!isDrawMode) {
+                            setSelectedShapeId(shape.id);
+                            setSelectedPlayerId(null);
+                          }
                         }}
                         onTap={() => {
-                          setSelectedShapeId(shape.id);
-                          setSelectedPlayerId(null);
+                          if (!isDrawMode) {
+                            setSelectedShapeId(shape.id);
+                            setSelectedPlayerId(null);
+                          }
                         }}
                         onDragEnd={(e) => {
                           updateSelectedShape({ x: e.target.x(), y: e.target.y() });
@@ -906,14 +1147,18 @@ export default function TacticalCanvas() {
                         dash={[5, 5]}
                         scaleX={shape.scaleX || 1}
                         scaleY={shape.scaleY || 1}
-                        draggable
+                        draggable={!isDrawMode}
                         onClick={() => {
-                          setSelectedShapeId(shape.id);
-                          setSelectedPlayerId(null);
+                          if (!isDrawMode) {
+                            setSelectedShapeId(shape.id);
+                            setSelectedPlayerId(null);
+                          }
                         }}
                         onTap={() => {
-                          setSelectedShapeId(shape.id);
-                          setSelectedPlayerId(null);
+                          if (!isDrawMode) {
+                            setSelectedShapeId(shape.id);
+                            setSelectedPlayerId(null);
+                          }
                         }}
                         onDragEnd={(e) => {
                           updateSelectedShape({ x: e.target.x(), y: e.target.y() });
@@ -946,14 +1191,18 @@ export default function TacticalCanvas() {
                         fontStyle="bold"
                         scaleX={shape.scaleX || 1}
                         scaleY={shape.scaleY || 1}
-                        draggable
+                        draggable={!isDrawMode}
                         onClick={() => {
-                          setSelectedShapeId(shape.id);
-                          setSelectedPlayerId(null);
+                          if (!isDrawMode) {
+                            setSelectedShapeId(shape.id);
+                            setSelectedPlayerId(null);
+                          }
                         }}
                         onTap={() => {
-                          setSelectedShapeId(shape.id);
-                          setSelectedPlayerId(null);
+                          if (!isDrawMode) {
+                            setSelectedShapeId(shape.id);
+                            setSelectedPlayerId(null);
+                          }
                         }}
                         onDragEnd={(e) => {
                           updateSelectedShape({ x: e.target.x(), y: e.target.y() });
@@ -976,8 +1225,8 @@ export default function TacticalCanvas() {
                   return null;
                 })}
 
-                {/* Outil d'étirement / redimensionnement Konva */}
-                {selectedShapeId && (
+                {/* Transformer de Konva */}
+                {!isDrawMode && selectedShapeId && (
                   <Transformer
                     ref={trRef}
                     boundBoxFunc={(oldBox, newBox) => {
@@ -997,16 +1246,20 @@ export default function TacticalCanvas() {
                       key={player.id}
                       x={player.x}
                       y={player.y}
-                      draggable
+                      draggable={!isDrawMode}
                       onDragStart={(e) => handleDragStart(e, player.id)}
                       onDragEnd={(e) => handleDragEnd(e, player.id)}
                       onClick={() => {
-                        setSelectedPlayerId(player.id);
-                        setSelectedShapeId(null);
+                        if (!isDrawMode) {
+                          setSelectedPlayerId(player.id);
+                          setSelectedShapeId(null);
+                        }
                       }}
                       onTap={() => {
-                        setSelectedPlayerId(player.id);
-                        setSelectedShapeId(null);
+                        if (!isDrawMode) {
+                          setSelectedPlayerId(player.id);
+                          setSelectedShapeId(null);
+                        }
                       }}
                     >
                       <Circle
