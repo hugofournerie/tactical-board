@@ -1,0 +1,62 @@
+@import "tailwindcss";
+
+:root {
+  --paper: #f5f5f7;
+  --surface: #ffffff;
+  --ink: #1d1d1f;
+  --muted: #6e6e73;
+  --line: #d2d2d7;
+  --pitch: #1e6b45;
+}
+
+@media (prefers-color-scheme: dark) {
+  :root {
+    --paper: #1c1c1e;
+    --surface: #2c2c2e;
+    --ink: #f5f5f7;
+    --muted: #98989d;
+    --line: #3a3a3c;
+    --pitch: #2b8458;
+  }
+}
+
+@theme inline {
+  --color-paper: var(--paper);
+  --color-surface: var(--surface);
+  --color-ink: var(--ink);
+  --color-muted: var(--muted);
+  --color-line: var(--line);
+  --color-pitch: var(--pitch);
+  --font-sans: -apple-system, BlinkMacSystemFont, "SF Pro Text", "Segoe UI", system-ui, sans-serif;
+}
+
+/* App plein écran : pas de scroll de page, pas de pull-to-refresh, pas de rebond iOS */
+html,
+body {
+  height: 100%;
+  overflow: hidden;
+  overscroll-behavior: none;
+}
+
+body {
+  background: var(--paper);
+  color: var(--ink);
+  font-family: var(--font-sans);
+  -webkit-font-smoothing: antialiased;
+  -webkit-tap-highlight-color: transparent;
+  -webkit-touch-callout: none;
+  touch-action: manipulation;
+}
+
+/* Zone de dessin : le terrain occupe le plus grand rectangle 105:68 qui rentre.
+   Même principe qu'en Phase 2, où le canvas Konva prendra cette taille. */
+.stage {
+  container-type: size;
+  display: grid;
+  place-items: center;
+}
+
+.pitch-frame {
+  width: min(100cqw, calc(100cqh * 105 / 68));
+  aspect-ratio: 105 / 68;
+}
