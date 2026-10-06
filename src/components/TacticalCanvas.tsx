@@ -247,7 +247,10 @@ export default function TacticalCanvas() {
     return () => window.removeEventListener('resize', updateWidth);
   }, []);
 
-  const scale = containerWidth / DESIGN_WIDTH;
+  // Facteur de réduction appliqué uniquement sur les petits écrans (< 768px)
+  const isMobile = containerWidth < 768;
+  const mobileScaleFactor = isMobile ? 0.82 : 1;
+  const scale = (containerWidth / DESIGN_WIDTH) * mobileScaleFactor;
 
   const [selectedBlueFormation, setSelectedBlueFormation] = useState<string>('4-3-3');
   const [selectedRedFormation, setSelectedRedFormation] = useState<string>('4-3-3');
@@ -564,10 +567,10 @@ export default function TacticalCanvas() {
 
       </div>
 
-      {/* Terrain Konva Responsive */}
-      <div ref={containerRef} className="w-full relative border-4 border-white rounded-lg shadow-2xl bg-green-700 overflow-hidden">
+      {/* Terrain Konva Responsive avec échelle ajustée sur mobile */}
+      <div ref={containerRef} className="w-full relative border-4 border-white rounded-lg shadow-2xl bg-green-700 flex justify-center items-center overflow-hidden">
         <Stage
-          width={containerWidth}
+          width={containerWidth * mobileScaleFactor}
           height={DESIGN_HEIGHT * scale}
           scale={{ x: scale, y: scale }}
         >
