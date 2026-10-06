@@ -1,7 +1,7 @@
 'use client';
 
 import React, { useState, useEffect } from 'react';
-import TacticalCanvas from '@/components/TacticalCanvas'; // Import de ton composant de terrain
+import TacticalCanvas from '@/components/TacticalCanvas';
 
 export default function Page() {
   const [isFullscreen, setIsFullscreen] = useState(false);
@@ -40,8 +40,6 @@ export default function Page() {
 
   return (
     <main className="min-h-screen overflow-y-auto bg-gray-900 text-white p-4">
-      
-      {/* Barre d'outils (Titre + Bouton Plein écran) */}
       <div className="flex justify-between items-center mb-4 max-w-7xl mx-auto w-full">
         <h1 className="text-xl font-bold">Tableau Tactique PWA</h1>
         <button
@@ -52,11 +50,9 @@ export default function Page() {
         </button>
       </div>
 
-      {/* Ton terrain tactique et tes options s'affichent ici */}
       <div className="w-full max-w-7xl mx-auto flex flex-col items-center pb-12">
         <TacticalCanvas />
       </div>
-
     </main>
   );
 }
