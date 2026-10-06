@@ -1,12 +1,11 @@
 'use client';
 
 import React, { useState, useEffect } from 'react';
-// 1. Remets tes propres imports ici (par exemple ton composant de terrain Konva ou tes états)
+import TacticalCanvas from '@/components/TacticalCanvas'; // Import de ton composant de terrain
 
 export default function Page() {
   const [isFullscreen, setIsFullscreen] = useState(false);
 
-  // Fonction plein écran sécurisée (fonctionne sur PC, ignore proprement sur iPhone si non supporté)
   const toggleFullscreen = () => {
     if (!document.fullscreenElement) {
       if (document.documentElement.requestFullscreen) {
@@ -23,7 +22,6 @@ export default function Page() {
     }
   };
 
-  // Raccourci clavier 'F' pour le PC
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
       const target = e.target as HTMLElement;
@@ -41,10 +39,9 @@ export default function Page() {
   }, []);
 
   return (
-    // min-h-screen et overflow-y-auto garantissent que le site peut défiler verticalement sur mobile
     <main className="min-h-screen overflow-y-auto bg-gray-900 text-white p-4">
       
-      {/* Barre d'outils (Titre + Bouton Plein écran visible sur PC) */}
+      {/* Barre d'outils (Titre + Bouton Plein écran) */}
       <div className="flex justify-between items-center mb-4 max-w-7xl mx-auto w-full">
         <h1 className="text-xl font-bold">Tableau Tactique PWA</h1>
         <button
@@ -55,10 +52,9 @@ export default function Page() {
         </button>
       </div>
 
-      {/* 2. TON VRAI TERRAIN ET TON CODE TACTIQUE VIENNENT ICI */}
+      {/* Ton terrain tactique et tes options s'affichent ici */}
       <div className="w-full max-w-7xl mx-auto flex flex-col items-center pb-12">
-        {/* Colle ici l'intérieur de ton application (ton Konva stage, tes menus déroulants, etc.) */}
-        
+        <TacticalCanvas />
       </div>
 
     </main>
