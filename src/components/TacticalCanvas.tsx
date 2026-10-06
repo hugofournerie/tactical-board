@@ -1,7 +1,7 @@
 'use client';
 // @ts-nocheck
 import React, { useState, useEffect, useRef } from 'react';
-import { Stage, Layer, Rect, Circle, Text, Group, Arrow } from 'react-konva';
+import { Stage, Layer, Rect, Circle, Text, Group, Arrow, Transformer } from 'react-konva';
 
 interface Player {
   id: string;
@@ -22,7 +22,10 @@ interface CustomShape {
   radius?: number;
   points?: number[];
   color: string;
+  opacity?: number;
   text?: string;
+  scaleX?: number;
+  scaleY?: number;
 }
 
 const MIN_DISTANCE = 44;
@@ -249,6 +252,8 @@ const FORMATIONS_RED: Record<string, { x: number; y: number; number: string; nam
 export default function TacticalCanvas() {
   const [scale, setScale] = useState<number>(0);
   const fieldAreaRef = useRef<HTMLDivElement>(null);
+  const shapeRef = useRef<any>(null);
+  const trRef = useRef<any>(null);
 
   useEffect(() => {
     const el = fieldAreaRef.current;
@@ -281,6 +286,13 @@ export default function TacticalCanvas() {
   const [shapes, setShapes] = useState<CustomShape[]>([]);
   const [selectedShapeId, setSelectedShapeId] = useState<string | null>(null);
   const [isShapeMenuOpen, setIsShapeMenuOpen] = useState<boolean>(false);
+
+  useEffect(() => {
+    if (selectedShapeId && trRef.current && shapeRef.current) {
+      trRef.current.nodes([shapeRef.current]);
+      trRef.current.getLayer().batchDraw();
+    }
+  }, [selectedShapeId]);
 
   useEffect(() => {
     const saved = localStorage.getItem('custom_tactical_formations');
@@ -317,6 +329,8 @@ export default function TacticalCanvas() {
 
   const [selectedPlayerId, setSelectedPlayerId] = useState<string | null>(null);
 
+  const selectedShape = shapes.find((s) => s.id === selectedShapeId);
+
   const addShape = (type: CustomShape['type']) => {
     const id = `shape-${Date.now()}`;
     const newShape: CustomShape = {
@@ -325,16 +339,32 @@ export default function TacticalCanvas() {
       x: 360,
       y: 220,
       color: '#f59e0b',
+      opacity: type === 'rect' || type === 'circle' ? 0.4 : 1,
       text: type === 'text' ? 'Annotation' : undefined,
-      points: type.includes('arrow') ? [0, 0, 80, 0] : undefined,
+      points: type.includes('arrow') ? [0, 0, 100, 0] : undefined,
       width: type === 'rect' ? 120 : undefined,
       height: type === 'rect' ? 70 : undefined,
       radius: type === 'circle' ? 40 : undefined,
+      scaleX: 1,
+      scaleY: 1,
     };
     setShapes((prev) => [...prev, newShape]);
     setSelectedShapeId(id);
     setSelectedPlayerId(null);
     setIsShapeMenuOpen(false);
+  };
+
+  const updateSelectedShape = (fields: Partial<CustomShape>) => {
+    if (!selectedShapeId) return;
+    setShapes((prev) =>
+      prev.map((s) => (s.id === selectedShapeId ? { ...s, ...fields } : s))
+    );
+  };
+
+  const deleteSelectedShape = () => {
+    if (!selectedShapeId) return;
+    setShapes((prev) => prev.filter((s) => s.id !== selectedShapeId));
+    setSelectedShapeId(null);
   };
 
   const handleSelectAction = (team: 'blue' | 'red', value: string) => {
@@ -506,7 +536,7 @@ export default function TacticalCanvas() {
         </div>
       )}
 
-      {/* Barre de contrôles du haut avec Menu Formes intégré */}
+      {/* Barre de contrôles supérieure */}
       <div className="shrink-0 flex justify-center px-2 pt-2 pb-1 z-50">
         <div className="flex flex-wrap items-center justify-center gap-3 bg-neutral-900/90 backdrop-blur-md px-4 py-1.5 rounded-full border border-neutral-800 shadow-lg relative">
 
@@ -663,6 +693,66 @@ export default function TacticalCanvas() {
         </div>
       </div>
 
+      {/* Barre d'édition contextuelle lorsqu'une forme est sélectionnée */}
+      {selectedShape && (
+        <div className="shrink-0 flex justify-center px-2 py-1 z-40">
+          <div className="flex items-center gap-3 bg-neutral-900/90 border border-amber-500/40 px-3 py-1 rounded-full shadow-lg text-xs">
+            <span className="text-amber-400 font-semibold">Forme sélectionnée :</span>
+
+            {/* Couleur */}
+            <div className="flex items-center gap-1.5">
+              <span className="text-neutral-400">Couleur :</span>
+              <input
+                type="color"
+                value={selectedShape.color}
+                onChange={(e) => updateSelectedShape({ color: e.target.value })}
+                className="w-6 h-6 rounded cursor-pointer bg-transparent border-0"
+              />
+            </div>
+
+            {/* Transparence pour les zones (Rect/Circle) */}
+            {(selectedShape.type === 'rect' || selectedShape.type === 'circle') && (
+              <div className="flex items-center gap-1.5 border-l border-neutral-800 pl-3">
+                <span className="text-neutral-400">Transparence :</span>
+                <input
+                  type="range"
+                  min="0.05"
+                  max="1"
+                  step="0.05"
+                  value={selectedShape.opacity ?? 0.4}
+                  onChange={(e) => updateSelectedShape({ opacity: parseFloat(e.target.value) })}
+                  className="w-20 accent-amber-500 cursor-pointer"
+                />
+                <span className="text-[10px] text-neutral-400 w-7 text-right">
+                  {Math.round((selectedShape.opacity ?? 0.4) * 100)}%
+                </span>
+              </div>
+            )}
+
+            {/* Texte de l'annotation */}
+            {selectedShape.type === 'text' && (
+              <div className="flex items-center gap-1.5 border-l border-neutral-800 pl-3">
+                <span className="text-neutral-400">Texte :</span>
+                <input
+                  type="text"
+                  value={selectedShape.text || ''}
+                  onChange={(e) => updateSelectedShape({ text: e.target.value })}
+                  className="bg-neutral-800 text-white px-2 py-0.5 rounded border border-neutral-700 text-xs outline-none focus:border-amber-500"
+                />
+              </div>
+            )}
+
+            {/* Bouton de suppression */}
+            <button
+              onClick={deleteSelectedShape}
+              className="ml-2 bg-red-600/20 hover:bg-red-600/40 text-red-400 border border-red-500/30 px-2 py-0.5 rounded text-xs transition"
+            >
+              Supprimer
+            </button>
+          </div>
+        </div>
+      )}
+
       {/* Zone du terrain */}
       <div ref={fieldAreaRef} className="flex-1 min-h-0 flex items-center justify-center">
         {scale > 0 && (
@@ -671,6 +761,12 @@ export default function TacticalCanvas() {
               width={DESIGN_WIDTH * scale}
               height={DESIGN_HEIGHT * scale}
               scale={{ x: scale, y: scale }}
+              onMouseDown={(e) => {
+                if (e.target === e.target.getStage()) {
+                  setSelectedShapeId(null);
+                  setSelectedPlayerId(null);
+                }
+              }}
             >
               <Layer>
                 {/* Terrain de football */}
@@ -689,15 +785,18 @@ export default function TacticalCanvas() {
                     return (
                       <Arrow
                         key={shape.id}
+                        ref={isSelected ? shapeRef : null}
                         x={shape.x}
                         y={shape.y}
-                        points={shape.points || [0, 0, 80, 0]}
+                        points={shape.points || [0, 0, 100, 0]}
                         pointerLength={10}
                         pointerWidth={10}
                         fill={shape.color}
                         stroke={shape.color}
                         strokeWidth={3}
                         dash={shape.type === 'dashed-arrow' ? [6, 6] : undefined}
+                        scaleX={shape.scaleX || 1}
+                        scaleY={shape.scaleY || 1}
                         draggable
                         onClick={() => {
                           setSelectedShapeId(shape.id);
@@ -708,10 +807,18 @@ export default function TacticalCanvas() {
                           setSelectedPlayerId(null);
                         }}
                         onDragEnd={(e) => {
-                          const { x, y } = e.target.position();
-                          setShapes((prev) =>
-                            prev.map((s) => (s.id === shape.id ? { ...s, x, y } : s))
-                          );
+                          updateSelectedShape({ x: e.target.x(), y: e.target.y() });
+                        }}
+                        onTransformEnd={() => {
+                          const node = shapeRef.current;
+                          if (node) {
+                            updateSelectedShape({
+                              x: node.x(),
+                              y: node.y(),
+                              scaleX: node.scaleX(),
+                              scaleY: node.scaleY(),
+                            });
+                          }
                         }}
                       />
                     );
@@ -721,14 +828,18 @@ export default function TacticalCanvas() {
                     return (
                       <Rect
                         key={shape.id}
+                        ref={isSelected ? shapeRef : null}
                         x={shape.x}
                         y={shape.y}
                         width={shape.width || 120}
                         height={shape.height || 70}
-                        fill={shape.color + '33'}
+                        fill={shape.color}
+                        opacity={shape.opacity ?? 0.4}
                         stroke={isSelected ? '#facc15' : shape.color}
                         strokeWidth={isSelected ? 3 : 2}
                         dash={[5, 5]}
+                        scaleX={shape.scaleX || 1}
+                        scaleY={shape.scaleY || 1}
                         draggable
                         onClick={() => {
                           setSelectedShapeId(shape.id);
@@ -739,10 +850,18 @@ export default function TacticalCanvas() {
                           setSelectedPlayerId(null);
                         }}
                         onDragEnd={(e) => {
-                          const { x, y } = e.target.position();
-                          setShapes((prev) =>
-                            prev.map((s) => (s.id === shape.id ? { ...s, x, y } : s))
-                          );
+                          updateSelectedShape({ x: e.target.x(), y: e.target.y() });
+                        }}
+                        onTransformEnd={() => {
+                          const node = shapeRef.current;
+                          if (node) {
+                            updateSelectedShape({
+                              x: node.x(),
+                              y: node.y(),
+                              scaleX: node.scaleX(),
+                              scaleY: node.scaleY(),
+                            });
+                          }
                         }}
                       />
                     );
@@ -752,13 +871,17 @@ export default function TacticalCanvas() {
                     return (
                       <Circle
                         key={shape.id}
+                        ref={isSelected ? shapeRef : null}
                         x={shape.x}
                         y={shape.y}
                         radius={shape.radius || 40}
-                        fill={shape.color + '33'}
+                        fill={shape.color}
+                        opacity={shape.opacity ?? 0.4}
                         stroke={isSelected ? '#facc15' : shape.color}
                         strokeWidth={isSelected ? 3 : 2}
                         dash={[5, 5]}
+                        scaleX={shape.scaleX || 1}
+                        scaleY={shape.scaleY || 1}
                         draggable
                         onClick={() => {
                           setSelectedShapeId(shape.id);
@@ -769,10 +892,18 @@ export default function TacticalCanvas() {
                           setSelectedPlayerId(null);
                         }}
                         onDragEnd={(e) => {
-                          const { x, y } = e.target.position();
-                          setShapes((prev) =>
-                            prev.map((s) => (s.id === shape.id ? { ...s, x, y } : s))
-                          );
+                          updateSelectedShape({ x: e.target.x(), y: e.target.y() });
+                        }}
+                        onTransformEnd={() => {
+                          const node = shapeRef.current;
+                          if (node) {
+                            updateSelectedShape({
+                              x: node.x(),
+                              y: node.y(),
+                              scaleX: node.scaleX(),
+                              scaleY: node.scaleY(),
+                            });
+                          }
                         }}
                       />
                     );
@@ -782,12 +913,15 @@ export default function TacticalCanvas() {
                     return (
                       <Text
                         key={shape.id}
+                        ref={isSelected ? shapeRef : null}
                         x={shape.x}
                         y={shape.y}
                         text={shape.text || 'Annotation'}
                         fontSize={14}
                         fill={shape.color}
                         fontStyle="bold"
+                        scaleX={shape.scaleX || 1}
+                        scaleY={shape.scaleY || 1}
                         draggable
                         onClick={() => {
                           setSelectedShapeId(shape.id);
@@ -798,10 +932,18 @@ export default function TacticalCanvas() {
                           setSelectedPlayerId(null);
                         }}
                         onDragEnd={(e) => {
-                          const { x, y } = e.target.position();
-                          setShapes((prev) =>
-                            prev.map((s) => (s.id === shape.id ? { ...s, x, y } : s))
-                          );
+                          updateSelectedShape({ x: e.target.x(), y: e.target.y() });
+                        }}
+                        onTransformEnd={() => {
+                          const node = shapeRef.current;
+                          if (node) {
+                            updateSelectedShape({
+                              x: node.x(),
+                              y: node.y(),
+                              scaleX: node.scaleX(),
+                              scaleY: node.scaleY(),
+                            });
+                          }
                         }}
                       />
                     );
@@ -809,6 +951,19 @@ export default function TacticalCanvas() {
 
                   return null;
                 })}
+
+                {/* Outil d'étirement / redimensionnement Konva */}
+                {selectedShapeId && (
+                  <Transformer
+                    ref={trRef}
+                    boundBoxFunc={(oldBox, newBox) => {
+                      if (newBox.width < 10 || newBox.height < 10) {
+                        return oldBox;
+                      }
+                      return newBox;
+                    }}
+                  />
+                )}
 
                 {/* Joueurs */}
                 {players.map((player) => {
